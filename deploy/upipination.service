@@ -1,0 +1,41 @@
+[Unit]
+Description=Upipination (private friends site)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=upipination
+Group=upipination
+WorkingDirectory=/opt/upipination
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=HOST=127.0.0.1
+EnvironmentFile=-/opt/upipination/.env
+ExecStart=/usr/bin/node /opt/upipination/server.js
+Restart=on-failure
+RestartSec=3
+
+# Sandboxing: the app can only write to its own data folder
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+ReadWritePaths=/opt/upipination/data
+
+[Install]
+WantedBy=multi-user.target

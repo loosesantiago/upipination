@@ -1,0 +1,22 @@
+{
+  "name": "upipination",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Private hangout for friends: chat, posts, events and art.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "setup": "node setup.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.5.0",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.4.1",
+    "helmet": "^8.0.0",
+    "multer": "^2.0.2",
+    "socket.io": "^4.8.1"
+  }
+}
