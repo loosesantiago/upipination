@@ -53,22 +53,16 @@ CREATE TABLE IF NOT EXISTS notifs (id INTEGER PRIMARY KEY, user_id INTEGER NOT N
 CREATE INDEX IF NOT EXISTS notifs_user ON notifs(user_id, id);
 CREATE TABLE IF NOT EXISTS yeahs (post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, ts INTEGER NOT NULL, PRIMARY KEY (post_id, user_id));
 `);
-// name color chosen by the user (1-12, matching --n1..--n12 in style.css); NULL = automatic
-if (!db.prepare('PRAGMA table_info(users)').all().some(c => c.name === 'color')) db.exec('ALTER TABLE users ADD COLUMN color INTEGER');
-const COLORS = 12;
-const POSTS_PER_PAGE = 10;
-const ART_PER_PAGE = 24;
 
 const q = {
-  userBySession: db.prepare('SELECT u.id, u.username, u.name, u.avatar, u.color, s.token AS sid FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.expires > ?'),
+  userBySession: db.prepare('SELECT u.id, u.username, u.name, u.avatar, s.token AS sid FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.expires > ?'),
   sessionAlive: db.prepare('SELECT 1 FROM sessions WHERE token = ? AND expires > ?'),
-  userById: db.prepare('SELECT id, name, avatar, color FROM users WHERE id = ?'),
+  userById: db.prepare('SELECT id, name, avatar FROM users WHERE id = ?'),
   userByUsername: db.prepare('SELECT * FROM users WHERE username = ?'),
-  users: db.prepare('SELECT id, name, avatar, color FROM users'),
+  users: db.prepare('SELECT id, name, avatar FROM users'),
   addUser: db.prepare('INSERT INTO users (username, name, pw, created) VALUES (?, ?, ?, ?)'),
   setName: db.prepare('UPDATE users SET name = ? WHERE id = ?'),
   setAvatar: db.prepare('UPDATE users SET avatar = ? WHERE id = ?'),
-  setColor: db.prepare('UPDATE users SET color = ? WHERE id = ?'),
   addSession: db.prepare('INSERT INTO sessions (token, user_id, expires) VALUES (?, ?, ?)'),
   delSession: db.prepare('DELETE FROM sessions WHERE token = ?'),
   gateGet: db.prepare('SELECT 1 FROM gate WHERE token = ? AND v = ? AND expires > ?'),
@@ -79,15 +73,10 @@ const q = {
   chatById: db.prepare('SELECT id, user_id AS uid, text, gif, sys, ts FROM chat WHERE id = ?'),
   recentChat: db.prepare('SELECT * FROM (SELECT id, user_id AS uid, text, gif, sys, ts FROM chat ORDER BY id DESC LIMIT 300) ORDER BY id'),
   myMessages: db.prepare('SELECT COUNT(*) AS n FROM chat WHERE user_id = ? AND sys = 0'),
-  postsPage: db.prepare('SELECT id, user_id AS uid, text, media, ts FROM posts ORDER BY id DESC LIMIT ? OFFSET ?'),
-  postCount: db.prepare('SELECT COUNT(*) AS n FROM posts'),
-  postsNewer: db.prepare('SELECT COUNT(*) AS n FROM posts WHERE id > ?'),
-  postCounts: db.prepare('SELECT user_id AS uid, COUNT(*) AS n FROM posts GROUP BY user_id'),
-  recentPosts: db.prepare('SELECT id, user_id AS uid, substr(text, 1, 200) AS text, ts FROM posts ORDER BY id DESC LIMIT 3'),
-  // ? is a JSON array of post ids
-  comments: db.prepare('SELECT id, post_id, user_id AS uid, text, ts FROM comments WHERE post_id IN (SELECT value FROM json_each(?)) ORDER BY id'),
+  posts: db.prepare('SELECT id, user_id AS uid, text, media, ts FROM posts ORDER BY id DESC LIMIT 200'),
+  comments: db.prepare('SELECT id, post_id, user_id AS uid, text, ts FROM comments WHERE post_id IN (SELECT id FROM posts ORDER BY id DESC LIMIT 200) ORDER BY id'),
   postExists: db.prepare('SELECT 1 FROM posts WHERE id = ?'),
-  yeahs: db.prepare('SELECT post_id, user_id FROM yeahs WHERE post_id IN (SELECT value FROM json_each(?)) ORDER BY ts'),
+  yeahs: db.prepare('SELECT post_id, user_id FROM yeahs WHERE post_id IN (SELECT id FROM posts ORDER BY id DESC LIMIT 200) ORDER BY ts'),
   addYeah: db.prepare('INSERT OR IGNORE INTO yeahs (post_id, user_id, ts) VALUES (?, ?, ?)'),
   delYeah: db.prepare('DELETE FROM yeahs WHERE post_id = ? AND user_id = ?'),
   yeahNotified: db.prepare("SELECT 1 FROM notifs WHERE kind = 'yeah' AND post_id = ? AND actor_id = ?"),
@@ -99,10 +88,7 @@ const q = {
   addEvent: db.prepare('INSERT INTO events (user_id, title, date, time, place, note, ts) VALUES (?, ?, ?, ?, ?, ?, ?)'),
   addGoing: db.prepare('INSERT OR IGNORE INTO going (event_id, user_id) VALUES (?, ?)'),
   delGoing: db.prepare('DELETE FROM going WHERE event_id = ? AND user_id = ?'),
-  artPage: db.prepare('SELECT id, user_id AS uid, file, ts FROM art ORDER BY id DESC LIMIT ? OFFSET ?'),
-  artCount: db.prepare('SELECT COUNT(*) AS n FROM art'),
-  artCounts: db.prepare('SELECT user_id AS uid, COUNT(*) AS n FROM art GROUP BY user_id'),
-  recentArt: db.prepare('SELECT id, user_id AS uid, file, ts FROM art ORDER BY id DESC LIMIT 6'),
+  art: db.prepare('SELECT id, user_id AS uid, file, ts FROM art ORDER BY id DESC LIMIT 500'),
   addArt: db.prepare('INSERT INTO art (user_id, file, ts) VALUES (?, ?, ?)'),
   emojis: db.prepare('SELECT name, file, user_id AS uid FROM emojis ORDER BY name'),
   emojiGet: db.prepare('SELECT * FROM emojis WHERE name = ?'),
@@ -126,14 +112,7 @@ const sha = t => crypto.createHash('sha256').update(String(t)).digest('hex');
 const newToken = () => crypto.randomBytes(32).toString('base64url');
 const toId = v => (/^\d{1,12}$/.test(String(v)) ? Number(v) : 0);
 const A = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-const pub = u => ({ id: u.id, name: u.name, avatar: u.avatar || null, color: u.color || null });
-const countsBy = rows => Object.fromEntries(rows.map(r => [r.uid, r.n]));
-// clamps the requested page to 1..pages
-function pageOf(total, per, page) {
-  const pages = Math.max(1, Math.ceil(total / per));
-  const p = Math.min(Math.max(1, toId(page) || 1), pages);
-  return { page: p, pages, total, offset: (p - 1) * per };
-}
+const pub = u => ({ id: u.id, name: u.name, avatar: u.avatar || null });
 const FILE_RE = /^[a-f0-9]{32}\.(jpg|png|gif|webp|mp4|webm|mov)$/;
 
 // @mentions use display names (which may contain spaces). Longest names are matched first,
@@ -376,8 +355,11 @@ app.post('/api/logout', (req, res) => {
 });
 
 // --- data ---
-// posts and art come in pages; the state only carries totals and the few newest for the sidebar
 app.get('/api/state', requireUser, (req, res) => {
+  const byPost = {};
+  for (const c of q.comments.all()) (byPost[c.post_id] ||= []).push({ id: c.id, uid: c.uid, text: c.text, ts: c.ts });
+  const yeahsBy = {};
+  for (const y of q.yeahs.all()) (yeahsBy[y.post_id] ||= []).push(y.user_id);
   const goingBy = {};
   for (const g of q.going.all()) (goingBy[g.event_id] ||= []).push(g.user_id);
   const since = new Date(now() - 2 * DAY).toISOString().slice(0, 10);
@@ -386,49 +368,14 @@ app.get('/api/state', requireUser, (req, res) => {
     users: q.users.all(),
     online: [...online.keys()],
     chat: q.recentChat.all().map(c => ({ ...c, sys: !!c.sys })),
-    recentPosts: q.recentPosts.all(),
-    recentArt: q.recentArt.all(),
-    counts: { posts: countsBy(q.postCounts.all()), art: countsBy(q.artCounts.all()) },
-    totals: { posts: q.postCount.get().n, art: q.artCount.get().n },
+    posts: q.posts.all().map(p => ({ ...p, media: JSON.parse(p.media), comments: byPost[p.id] || [], yeahs: yeahsBy[p.id] || [] })),
     events: q.events.all(since).map(e => ({ ...e, going: goingBy[e.id] || [] })),
+    art: q.art.all(),
     emojis: q.emojis.all(),
     gifs: q.gifs.all(),
     notifs: q.notifs.all(req.user.id).map(n => ({ ...n, seen: !!n.seen })),
     stats: { messages: q.myMessages.get(req.user.id).n }
   });
-});
-
-// ?page=N, or ?post=ID to get whichever page holds that post (used by notifications)
-app.get('/api/posts', requireUser, (req, res) => {
-  const total = q.postCount.get().n;
-  let want = req.query.page;
-  const postId = toId(req.query.post);
-  if (postId) want = Math.floor(q.postsNewer.get(postId).n / POSTS_PER_PAGE) + 1;
-  const pg = pageOf(total, POSTS_PER_PAGE, want);
-  const rows = q.postsPage.all(POSTS_PER_PAGE, pg.offset);
-  const ids = JSON.stringify(rows.map(p => p.id));
-  const byPost = {};
-  for (const c of q.comments.all(ids)) (byPost[c.post_id] ||= []).push({ id: c.id, uid: c.uid, text: c.text, ts: c.ts });
-  const yeahsBy = {};
-  for (const y of q.yeahs.all(ids)) (yeahsBy[y.post_id] ||= []).push(y.user_id);
-  res.json({
-    page: pg.page, pages: pg.pages, total,
-    items: rows.map(p => ({ ...p, media: JSON.parse(p.media), comments: byPost[p.id] || [], yeahs: yeahsBy[p.id] || [] }))
-  });
-});
-
-app.get('/api/art', requireUser, (req, res) => {
-  const total = q.artCount.get().n;
-  const pg = pageOf(total, ART_PER_PAGE, req.query.page);
-  res.json({ page: pg.page, pages: pg.pages, total, items: q.artPage.all(ART_PER_PAGE, pg.offset) });
-});
-
-app.post('/api/color', requireUser, (req, res) => {
-  const c = req.body?.color;
-  if (!(c === null || (Number.isInteger(c) && c >= 1 && c <= COLORS))) return res.status(400).json({ error: 'bad_request' });
-  q.setColor.run(c, req.user.id);
-  changed();
-  res.json({ ok: true });
 });
 
 app.post('/api/nickname', requireUser, (req, res) => {
