@@ -2,9 +2,8 @@
 (() => {
   const TZ = 'America/Argentina/Buenos_Aires', LOC = 'es-AR', DAY = 864e5;
   const FILE_RE = /^[a-f0-9]{32}\.(jpg|png|gif|webp|mp4|webm|mov)$/;
-  const EMOJIS = '😀 😂 🤣 😊 😍 🥰 😘 😎 🤩 🥳 😏 😅 😭 😡 🤯 😴 🤔 🙄 😬 🤗 🫠 🥲 😇 🤠 👍 👎 👏 🙌 🙏 💪 🤝 ✌️ 🤘 👀 💀 👻 ❤️ 🧡 💛 💚 💙 💜 🖤 💔 🔥 ✨ ⭐ 🎉 🎂 🍕 🍔 🍺 🍷 🧉 ☕ 🎲 🎮 🎨 🖌️ 📸 🎵 ⚽ 🌙 ☀️ 🌈 🐶 🐱 🦊 🐸 🦄'.split(' ');
   const app = document.getElementById('app');
-  const S = { me: null, users: {}, chat: [], posts: [], events: [], art: [], emojis: [], gifs: [], notifs: [], online: [], stats: { messages: 0 }, tab: 'posts', picker: null, typing: {}, dark: false };
+  const S = { me: null, users: {}, chat: [], posts: [], events: [], art: [], emojis: [], notifs: [], online: [], stats: { messages: 0 }, tab: 'posts', picker: null, typing: {}, dark: false };
   const R = {};
   let sock = null;
   try { S.dark = localStorage.getItem('upi_theme') === 'dark'; } catch (e) {}
@@ -58,7 +57,7 @@
   const ERR = {
     rate: 'Vas muy rápido. Esperá unos segundos.',
     file: 'Ese archivo no se puede subir: tipo o tamaño no permitido (fotos JPG, PNG, GIF o WEBP hasta 12 MB; videos MP4, WEBM o MOV hasta 60 MB).',
-    emoji_taken: 'Ese nombre de emoji ya lo usa otra persona.',
+    emoji_taken: 'Ese nombre de emote ya lo usa otra persona.',
     empty: 'Escribí algo o agregá una foto.',
     name: 'El nombre debe tener entre 1 y 24 caracteres.',
     auth: 'Tu sesión terminó. Volvé a iniciar sesión.'
@@ -168,7 +167,7 @@
     const st = await api('/api/state');
     S.me = st.me; S.users = {};
     st.users.forEach(u => { S.users[u.id] = u; });
-    Object.assign(S, { chat: st.chat, posts: st.posts, events: st.events, art: st.art, emojis: st.emojis, gifs: st.gifs, notifs: st.notifs, stats: st.stats, online: st.online });
+    Object.assign(S, { chat: st.chat, posts: st.posts, events: st.events, art: st.art, emojis: st.emojis, notifs: st.notifs, stats: st.stats, online: st.online });
     buildMentionRe();
   }
   let reloadTimer;
@@ -222,8 +221,7 @@
     R.meAv = h('span');
     R.meNick = h('b', { class: 'nick small' });
     const composer = h('form', { class: 'composer', onsubmit: sendChat }, R.meAv, R.meNick, R.chatInput,
-      h('button', { type: 'button', class: 'btn', title: 'Emojis', onclick: () => togglePicker('emoji') }, '☺'),
-      h('button', { type: 'button', class: 'btn', title: 'GIFs', onclick: () => togglePicker('gif') }, 'GIF'),
+      h('button', { type: 'button', class: 'btn', title: 'Emotes', onclick: togglePicker }, '☺'),
       h('button', { type: 'submit', class: 'btn' }, 'Enviar'));
     const chat = h('section', { class: 'box chat' }, h('div', { class: 'bar' }, h('span', null, 'Chat'), R.chatCount), R.log, R.typing, R.picker, composer);
 
@@ -250,7 +248,7 @@
     updateMe(); updateOnline();
     if (!R.editingNick) updateProfile();
     updateTicker(); updateSide(); updateBadge(); updateSection();
-    if (S.picker === 'gif' || S.picker === 'custom') updatePicker();
+    if (S.picker) updatePicker();
   }
   function updateMe() {
     R.greet.textContent = S.me.name;
@@ -715,12 +713,12 @@
     return el;
   }
 
-  // ---------- emoji popover for posts and comments ----------
-  const E = { el: null, target: null, kind: 'emoji' };
+  // ---------- emote popover for posts and comments ----------
+  const E = { el: null, target: null };
   function closeEmojis() { if (E.el) E.el.classList.add('hidden'); E.target = null; }
   function emojiBtn(target) {
     const btn = h('button', {
-      type: 'button', class: 'btn', title: 'Emojis',
+      type: 'button', class: 'btn', title: 'Emotes',
       onclick: () => {
         if (E.target === target && !E.el.classList.contains('hidden')) return closeEmojis();
         E.el = E.el || floating('emoji-pop');
@@ -732,16 +730,12 @@
   }
   function drawEmojis() {
     const add = s => { const el = live(E.target); if (el) { E.target = el; insertAt(el, s); } };
-    const tabs = [['emoji', 'Emojis'], ['custom', 'Mis emojis']].map(([id, l]) =>
-      h('button', { type: 'button', class: 'tab' + (E.kind === id ? ' on' : ''), onclick: () => { E.kind = id; drawEmojis(); } }, l));
     const custom = S.emojis.filter(x => up(x.file));
-    const body = E.kind === 'emoji'
-      ? h('div', { class: 'emoji-grid' }, EMOJIS.map(ch => h('button', { type: 'button', onclick: () => add(ch) }, ch)))
-      : custom.length
-        ? h('div', { class: 'ce-grid' }, custom.map(x => h('button', { type: 'button', title: `:${x.name}:`, onclick: () => add(`:${x.name}: `) }, h('img', { src: up(x.file), alt: '' }), h('span', null, `:${x.name}:`))))
-        : h('div', { class: 'small muted' }, 'Todavía no hay emojis propios. Creálos desde el chat: ☺ → Mis emojis.');
+    const body = custom.length
+      ? h('div', { class: 'ce-grid' }, custom.map(x => h('button', { type: 'button', title: `:${x.name}:`, onclick: () => add(`:${x.name}: `) }, h('img', { src: up(x.file), alt: '' }), h('span', null, `:${x.name}:`))))
+      : h('div', { class: 'small muted' }, 'Todavía no hay emotes. Creálos desde el chat con el botón ☺.');
     E.el.replaceChildren(
-      h('div', { class: 'picker-tabs' }, tabs, h('span', { class: 'spacer' }), h('button', { type: 'button', class: 'linkbtn', onclick: closeEmojis }, '[cerrar]')),
+      h('div', { class: 'picker-tabs' }, h('span', { class: 'tab on', style: 'cursor: default' }, 'Emotes'), h('span', { class: 'spacer' }), h('button', { type: 'button', class: 'linkbtn', onclick: closeEmojis }, '[cerrar]')),
       h('div', { class: 'picker-body' }, body));
     E.el.classList.remove('hidden');
     place(E.el, E.anchor.isConnected ? E.anchor : live(E.target) || E.anchor);
@@ -797,73 +791,48 @@
     return el ? flash(el) : toast('Ese post ya no está.');
   }
 
-  function togglePicker(kind) {
-    const open = S.picker === kind || (kind === 'emoji' && S.picker === 'custom');
-    S.picker = open ? null : kind;
+  function togglePicker() {
+    S.picker = !S.picker;
     updatePicker();
   }
   function updatePicker() {
     R.picker.classList.toggle('hidden', !S.picker);
     if (!S.picker) return;
-    const tabs = [['emoji', 'Emojis'], ['custom', 'Mis emojis'], ['gif', 'GIFs']].map(([id, l]) =>
-      h('button', { type: 'button', class: 'tab' + (S.picker === id ? ' on' : ''), onclick: () => { S.picker = id; updatePicker(); } }, l));
-    let body;
-    if (S.picker === 'emoji') {
-      body = [h('div', { class: 'emoji-grid' }, EMOJIS.map(ch => h('button', { type: 'button', onclick: () => insert(ch) }, ch)))];
-    } else if (S.picker === 'custom') {
-      const nameIn = h('input', { class: 'input emoji-name', maxLength: 24, placeholder: 'nombre', value: R.emojiName || '', oninput: e => { R.emojiName = e.target.value; } });
-      const fileIn = h('input', {
-        type: 'file', accept: 'image/jpeg,image/png,image/gif,image/webp',
-        onchange: e => {
-          const f = e.target.files[0];
-          if (!f) return;
-          if (R.pendingEmoji) URL.revokeObjectURL(R.pendingEmoji.url);
-          R.pendingEmoji = { file: f, url: URL.createObjectURL(f) };
-          updatePicker();
-        }
-      });
-      const form = h('form', {
-        class: 'inline-form',
-        onsubmit: async e => {
-          e.preventDefault();
-          const name = nameIn.value.trim().toLowerCase();
-          if (!/^[a-z0-9_]{2,24}$/.test(name)) return toast('El nombre puede tener letras, números y guion bajo (de 2 a 24).');
-          if (!R.pendingEmoji) return toast('Elegí una imagen o GIF.');
-          const f = R.pendingEmoji.file;
-          try {
-            const blob = f.type === 'image/gif' || f.size < 1e6 ? f : await squareImage(f, 128, 'image/png');
-            const fd = new FormData();
-            fd.append('name', name);
-            fd.append('file', blob, 'emoji');
-            await api('/api/emojis', fd, true);
-            URL.revokeObjectURL(R.pendingEmoji.url);
-            R.pendingEmoji = null; R.emojiName = '';
-            updatePicker();
-          } catch (x) { toast(errMsg(x)); }
-        }
-      }, h('label', { class: 'btn' }, R.pendingEmoji ? h('img', { class: 'preview-img', src: R.pendingEmoji.url, alt: '' }) : null, 'Imagen o GIF', fileIn), nameIn, h('button', { class: 'btn', type: 'submit' }, 'Crear emoji'));
-      body = [form, h('div', { class: 'small muted' }, 'Usalos en el chat y en los posts escribiendo :nombre: o tocándolos acá.'),
-        S.emojis.length ? h('div', { class: 'ce-grid' }, S.emojis.filter(x => up(x.file)).map(x => h('button', { type: 'button', title: `:${x.name}:`, onclick: () => insert(`:${x.name}: `) }, h('img', { src: up(x.file), alt: '' }), h('span', null, `:${x.name}:`)))) : null];
-    } else {
-      const fileIn = h('input', {
-        type: 'file', accept: 'image/gif,image/webp', multiple: true,
-        onchange: async e => {
-          const list = [...e.target.files].slice(0, 6);
-          e.target.value = '';
-          if (!list.length) return;
+    const nameIn = h('input', { class: 'input emoji-name', maxLength: 24, placeholder: 'nombre', value: R.emojiName || '', oninput: e => { R.emojiName = e.target.value; } });
+    const fileIn = h('input', {
+      type: 'file', accept: 'image/jpeg,image/png,image/gif,image/webp',
+      onchange: e => {
+        const f = e.target.files[0];
+        if (!f) return;
+        if (R.pendingEmoji) URL.revokeObjectURL(R.pendingEmoji.url);
+        R.pendingEmoji = { file: f, url: URL.createObjectURL(f) };
+        updatePicker();
+      }
+    });
+    const form = h('form', {
+      class: 'inline-form',
+      onsubmit: async e => {
+        e.preventDefault();
+        const name = nameIn.value.trim().toLowerCase();
+        if (!/^[a-z0-9_]{2,24}$/.test(name)) return toast('El nombre puede tener letras, números y guion bajo (de 2 a 24).');
+        if (!R.pendingEmoji) return toast('Elegí una imagen o GIF.');
+        const f = R.pendingEmoji.file;
+        try {
+          const blob = f.type === 'image/gif' || f.size < 1e6 ? f : await squareImage(f, 128, 'image/png');
           const fd = new FormData();
-          list.forEach(f => fd.append('files', f));
-          try { await api('/api/gifs', fd, true); } catch (x) { toast(errMsg(x)); }
-        }
-      });
-      body = [h('div', { class: 'inline-form' }, h('label', { class: 'btn' }, 'Subir GIF', fileIn), h('span', { class: 'small muted' }, S.gifs.length ? 'Tocá un GIF para enviarlo' : 'Todavía no hay GIFs, subí el primero')),
-        h('div', { class: 'thumbs' }, S.gifs.filter(g => up(g.file)).map(g => h('button', {
-          class: 'thumb', type: 'button',
-          onclick: () => { if (sock) sock.emit('chat', { gif: g.id }, ack => { if (ack && ack.error) toast(ERR.rate); }); S.picker = null; updatePicker(); }
-        }, h('img', { src: up(g.file), alt: 'GIF', loading: 'lazy' }))))];
-    }
+          fd.append('name', name);
+          fd.append('file', blob, 'emoji');
+          await api('/api/emojis', fd, true);
+          URL.revokeObjectURL(R.pendingEmoji.url);
+          R.pendingEmoji = null; R.emojiName = '';
+          updatePicker();
+        } catch (x) { toast(errMsg(x)); }
+      }
+    }, h('label', { class: 'btn' }, R.pendingEmoji ? h('img', { class: 'preview-img', src: R.pendingEmoji.url, alt: '' }) : null, 'Imagen o GIF', fileIn), nameIn, h('button', { class: 'btn', type: 'submit' }, 'Crear emote'));
+    const body = [form, h('div', { class: 'small muted' }, 'Usalos en el chat y en los posts escribiendo :nombre: o tocándolos acá.'),
+      S.emojis.length ? h('div', { class: 'ce-grid' }, S.emojis.filter(x => up(x.file)).map(x => h('button', { type: 'button', title: `:${x.name}:`, onclick: () => insert(`:${x.name}: `) }, h('img', { src: up(x.file), alt: '' }), h('span', null, `:${x.name}:`)))) : null];
     R.picker.replaceChildren(
-      h('div', { class: 'picker-tabs' }, tabs, h('span', { class: 'spacer' }), h('button', { type: 'button', class: 'linkbtn', onclick: () => { S.picker = null; updatePicker(); } }, '[cerrar]')),
+      h('div', { class: 'picker-tabs' }, h('span', { class: 'tab on', style: 'cursor: default' }, 'Emotes'), h('span', { class: 'spacer' }), h('button', { type: 'button', class: 'linkbtn', onclick: () => { S.picker = null; updatePicker(); } }, '[cerrar]')),
       h('div', { class: 'picker-body' }, body));
   }
 
