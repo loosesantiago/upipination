@@ -1,5 +1,5 @@
-.light { --page:#e4d8bd; --panel:#f8f2e4; --row:#f1e8d5; --row2:#faf6ec; --border:#9c8462; --bar1:#86603a; --bar2:#5a3c1f; --bartext:#fdf6e6; --text:#2b2418; --muted:#6e604a; --link:#2a4d8f; --accent:#b8561b; --tab:linear-gradient(#fbf6ea,#e3d5b6); --tab-on:linear-gradient(#fffbee,#f1d9a0); --btn:linear-gradient(#fffaf0,#e3d5b6); --input:#fffdf8; --ticker:#fff3c4; --tickertext:#6b3d10; --sys:#2f7a3a; --n1:#b8361b; --n2:#2a4d8f; --n3:#2f7a3a; --n4:#8a3a8f; --n5:#a8641b; --n6:#1f7a7a; --n7:#b02a6b; --n8:#5f7a1a; --n9:#4a3fa8; --n10:#7a4a24; --n11:#44607a; --n12:#9c1c2c; color-scheme: light; }
-.dark { --page:#141821; --panel:#1e2430; --row:#232a38; --row2:#1b212c; --border:#3e4a63; --bar1:#3d5280; --bar2:#1f2b44; --bartext:#e6ecf7; --text:#d6dbe5; --muted:#8a93a6; --link:#8fb3ff; --accent:#ffb04a; --tab:linear-gradient(#2c3547,#20283a); --tab-on:linear-gradient(#4a5d86,#2f3d5c); --btn:linear-gradient(#343e55,#242c3d); --input:#141922; --ticker:#2a2615; --tickertext:#ffd27a; --sys:#7fd18a; --n1:#ff8a6a; --n2:#8fb3ff; --n3:#7fd18a; --n4:#e09aff; --n5:#ffc46a; --n6:#6ad8d8; --n7:#ff8ac4; --n8:#c4dc6a; --n9:#a99cff; --n10:#d8a77a; --n11:#9fbcd6; --n12:#ff7a8a; color-scheme: dark; }
+.light { --page:#e4d8bd; --panel:#f8f2e4; --row:#f1e8d5; --row2:#faf6ec; --border:#9c8462; --bar1:#86603a; --bar2:#5a3c1f; --bartext:#fdf6e6; --text:#2b2418; --muted:#6e604a; --link:#2a4d8f; --accent:#b8561b; --tab:linear-gradient(#fbf6ea,#e3d5b6); --tab-on:linear-gradient(#fffbee,#f1d9a0); --btn:linear-gradient(#fffaf0,#e3d5b6); --input:#fffdf8; --ticker:#fff3c4; --tickertext:#6b3d10; --sys:#2f7a3a; --n1:#b8361b; --n2:#2a4d8f; --n3:#2f7a3a; --n4:#8a3a8f; --n5:#a8641b; --n6:#1f7a7a; color-scheme: light; }
+.dark { --page:#141821; --panel:#1e2430; --row:#232a38; --row2:#1b212c; --border:#3e4a63; --bar1:#3d5280; --bar2:#1f2b44; --bartext:#e6ecf7; --text:#d6dbe5; --muted:#8a93a6; --link:#8fb3ff; --accent:#ffb04a; --tab:linear-gradient(#2c3547,#20283a); --tab-on:linear-gradient(#4a5d86,#2f3d5c); --btn:linear-gradient(#343e55,#242c3d); --input:#141922; --ticker:#2a2615; --tickertext:#ffd27a; --sys:#7fd18a; --n1:#ff8a6a; --n2:#8fb3ff; --n3:#7fd18a; --n4:#e09aff; --n5:#ffc46a; --n6:#6ad8d8; color-scheme: dark; }
 
 * { box-sizing: border-box; }
 body { margin: 0; min-height: 100vh; background-color: var(--page); background-image: repeating-linear-gradient(45deg, rgba(0,0,0,.025) 0 2px, transparent 2px 6px); color: var(--text); font: 13px/1.45 Verdana, Tahoma, Geneva, sans-serif; }
@@ -64,11 +64,6 @@ textarea.input { min-height: 70px; resize: vertical; }
 .count { padding: 6px 9px; border-bottom: 1px solid var(--border); }
 .profile { padding: 10px; display: flex; flex-direction: column; gap: 8px; align-items: center; }
 .profile label.pic { cursor: pointer; }
-.colors { width: 100%; display: flex; flex-direction: column; gap: 4px; }
-.swatches { display: flex; flex-wrap: wrap; gap: 5px; }
-.swatch { width: 20px; height: 20px; padding: 0; border-radius: 50%; border: 1px solid var(--border); cursor: pointer; }
-.swatch.auto { width: auto; padding: 0 7px; border-radius: 10px; border-style: dashed; background: var(--input); color: var(--muted); font: 10px Verdana, sans-serif; }
-.swatch.on { outline: 2px solid var(--text); outline-offset: 2px; }
 .stats { width: 100%; font-size: 11px; border-top: 1px dotted var(--border); padding-top: 6px; display: flex; flex-direction: column; gap: 2px; }
 .stats div { display: flex; justify-content: space-between; }
 .recent { padding: 5px 9px; border-bottom: 1px dotted var(--border); display: flex; flex-direction: column; min-width: 0; }
@@ -77,8 +72,6 @@ textarea.input { min-height: 70px; resize: vertical; }
 .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
 
 .av { flex: none; display: block; object-fit: cover; border: 1px solid var(--border); }
-.av-btn { flex: none; display: block; padding: 0; border: 0; background: transparent; line-height: 0; cursor: zoom-in; }
-.av-btn:hover .av { border-color: var(--accent); }
 .av-i { display: grid; place-items: center; font-family: 'Trebuchet MS', Verdana, sans-serif; font-weight: bold; color: var(--bartext); background: linear-gradient(var(--bar1), var(--bar2)); }
 
 .chat { flex: 999 1 500px; min-width: 0; display: flex; flex-direction: column; height: 600px; }
@@ -116,8 +109,6 @@ textarea.input { min-height: 70px; resize: vertical; }
 
 .section-body { padding: 10px; display: flex; flex-direction: column; gap: 10px; }
 .list { display: flex; flex-direction: column; gap: 10px; }
-.pager { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 4px; }
-.pager .btn.on { background: var(--tab-on); border-color: var(--accent); color: var(--accent); }
 .compose { border: 1px solid var(--border); background: var(--row); padding: 9px; display: flex; flex-direction: column; gap: 8px; }
 .pending { display: flex; flex-wrap: wrap; gap: 6px; }
 .pending > div { position: relative; width: 80px; height: 80px; padding: 2px; border: 1px solid var(--border); background: var(--input); }
@@ -159,11 +150,6 @@ textarea.input { min-height: 70px; resize: vertical; }
 .gallery img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .gallery figcaption { font-size: 10px; color: var(--muted); text-align: center; }
 .lightbox { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 24px; background: rgba(0,0,0,.7); cursor: zoom-out; }
-.av-preview { display: flex; flex-direction: column; align-items: center; gap: 12px; animation: pop .15s ease-out; }
-.av-preview img { width: min(260px, 70vw); aspect-ratio: 1; border-radius: 50%; object-fit: cover; border: 4px solid var(--panel); box-shadow: 0 6px 24px rgba(0,0,0,.5); background: var(--panel); }
-.av-preview b { font-size: 14px; padding: 3px 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; }
-@keyframes pop { from { transform: scale(.85); opacity: 0; } to { transform: none; opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .av-preview { animation: none; } }
 .lightbox figure { margin: 0; max-width: min(960px, 100%); }
 .lightbox img { display: block; max-width: 100%; max-height: 80vh; margin: 0 auto; }
 

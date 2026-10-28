@@ -4,13 +4,7 @@
   const FILE_RE = /^[a-f0-9]{32}\.(jpg|png|gif|webp|mp4|webm|mov)$/;
   const EMOJIS = '😀 😂 🤣 😊 😍 🥰 😘 😎 🤩 🥳 😏 😅 😭 😡 🤯 😴 🤔 🙄 😬 🤗 🫠 🥲 😇 🤠 👍 👎 👏 🙌 🙏 💪 🤝 ✌️ 🤘 👀 💀 👻 ❤️ 🧡 💛 💚 💙 💜 🖤 💔 🔥 ✨ ⭐ 🎉 🎂 🍕 🍔 🍺 🍷 🧉 ☕ 🎲 🎮 🎨 🖌️ 📸 🎵 ⚽ 🌙 ☀️ 🌈 🐶 🐱 🦊 🐸 🦄'.split(' ');
   const app = document.getElementById('app');
-  const S = {
-    me: null, users: {}, chat: [], events: [], emojis: [], gifs: [], notifs: [], online: [], stats: { messages: 0 }, tab: 'posts', picker: null, typing: {}, dark: false,
-    // posts and art are loaded one page at a time
-    posts: [], art: [], pg: { posts: { page: 1, pages: 1 }, art: { page: 1, pages: 1 } },
-    recentPosts: [], recentArt: [], counts: { posts: {}, art: {} }, totals: { posts: 0, art: 0 }
-  };
-  const COLORS = 12; // matches --n1..--n12 in style.css
+  const S = { me: null, users: {}, chat: [], posts: [], events: [], art: [], emojis: [], gifs: [], notifs: [], online: [], stats: { messages: 0 }, tab: 'posts', picker: null, typing: {}, dark: false };
   const R = {};
   let sock = null;
   try { S.dark = localStorage.getItem('upi_theme') === 'dark'; } catch (e) {}
@@ -33,11 +27,7 @@
   const up = f => (FILE_RE.test(f || '') ? '/uploads/' + f : '');
   const isVideo = f => /\.(mp4|webm|mov)$/.test(f);
   const ini = n => (String(n || '?').trim().charAt(0) || '?').toUpperCase();
-  // the user's chosen color, or one picked from their id
-  const colorOf = id => {
-    const c = (S.users[id] || {}).color;
-    return `var(--n${c >= 1 && c <= COLORS ? c : (Number(id) || 0) % 6 + 1})`;
-  };
+  const colorOf = id => `var(--n${(Number(id) || 0) % 6 + 1})`;
   const userOf = id => S.users[id] || { id, name: '?' };
   const clock = ts => new Date(ts).toLocaleTimeString(LOC, { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: TZ });
   const todayAR = () => new Date().toLocaleDateString('en-CA', { timeZone: TZ });
@@ -175,21 +165,11 @@
   }
   async function enter() { await loadState(); buildApp(); connect(); }
   async function loadState() {
-    const [st] = await Promise.all([api('/api/state'), fetchPage('posts', 'page=' + S.pg.posts.page), fetchPage('art', 'page=' + S.pg.art.page)]);
+    const st = await api('/api/state');
     S.me = st.me; S.users = {};
     st.users.forEach(u => { S.users[u.id] = u; });
-    Object.assign(S, { chat: st.chat, recentPosts: st.recentPosts, recentArt: st.recentArt, counts: st.counts, totals: st.totals, events: st.events, emojis: st.emojis, gifs: st.gifs, notifs: st.notifs, stats: st.stats, online: st.online });
+    Object.assign(S, { chat: st.chat, posts: st.posts, events: st.events, art: st.art, emojis: st.emojis, gifs: st.gifs, notifs: st.notifs, stats: st.stats, online: st.online });
     buildMentionRe();
-  }
-  // loads one page of posts or art; an older request that finishes late is ignored
-  const pageSeq = { posts: 0, art: 0 };
-  async function fetchPage(kind, query) {
-    const n = ++pageSeq[kind];
-    const r = await api(`/api/${kind}?${query}`);
-    if (n !== pageSeq[kind]) return false;
-    S[kind] = r.items;
-    S.pg[kind] = { page: r.page, pages: r.pages };
-    return true;
   }
   let reloadTimer;
   function reload() {
@@ -199,14 +179,9 @@
     }, 250);
   }
 
-  // zoom: clicking the photo opens a big round preview of it
-  function avatar(uid, size, zoom) {
+  function avatar(uid, size) {
     const u = userOf(uid), st = { width: size + 'px', height: size + 'px' };
-    if (up(u.avatar)) {
-      const img = h('img', { class: 'av', src: up(u.avatar), alt: '', style: st });
-      if (!zoom) return img;
-      return h('button', { type: 'button', class: 'av-btn', title: `Ver la foto de ${u.name}`, onclick: e => { e.stopPropagation(); openAvatar(uid); } }, img);
-    }
+    if (up(u.avatar)) return h('img', { class: 'av', src: up(u.avatar), alt: '', style: st });
     return h('span', { class: 'av av-i', style: { ...st, fontSize: Math.round(size * 0.45) + 'px' } }, ini(u.name));
   }
 
@@ -280,7 +255,7 @@
   function updateMe() {
     R.greet.textContent = S.me.name;
     R.greet.style.color = colorOf(S.me.id);
-    R.meAv.replaceChildren(avatar(S.me.id, 24, true));
+    R.meAv.replaceChildren(avatar(S.me.id, 24));
     R.meNick.textContent = S.me.name + ':';
     R.meNick.style.color = colorOf(S.me.id);
   }
@@ -289,7 +264,7 @@
     R.onlineCount.textContent = ids.length === 1 ? '1 usuario en línea' : `${ids.length} usuarios en línea`;
     R.chatCount.textContent = `${ids.length} conectados`;
     R.onlineList.replaceChildren(...ids.map(id => h('div', { class: 'row' },
-      h('span', { class: 'dot' }), avatar(id, 18, true),
+      h('span', { class: 'dot' }), avatar(id, 18),
       h('b', { class: 'ellip', style: { color: colorOf(id) } }, userOf(id).name),
       h('span', { class: 'tiny muted' }, id === S.me.id ? 'vos' : 'en línea'))));
   }
@@ -319,31 +294,10 @@
       h('label', { class: 'pic', title: 'Cambiar foto' }, avatar(S.me.id, 84), picInput()),
       h('b', { style: { fontSize: '13px', color: colorOf(S.me.id) } }, S.me.name),
       nickArea,
-      colorPicker(),
       h('div', { class: 'stats' },
         stat('Mensajes:', S.stats.messages),
-        stat('Posts:', S.counts.posts[S.me.id] || 0),
-        stat('Arte:', S.counts.art[S.me.id] || 0)));
-  }
-  // round swatches to choose the color of your name; "auto" goes back to the default one
-  function colorPicker() {
-    const cur = userOf(S.me.id).color || null;
-    const opts = [null, ...Array.from({ length: COLORS }, (_, i) => i + 1)];
-    return h('div', { class: 'colors' },
-      h('span', { class: 'label' }, 'Color de tu nombre:'),
-      h('div', { class: 'swatches', role: 'radiogroup', 'aria-label': 'Color de tu nombre' }, opts.map(c => h('button', {
-        type: 'button', role: 'radio', 'aria-checked': String(cur === c),
-        class: 'swatch' + (c ? '' : ' auto') + (cur === c ? ' on' : ''),
-        title: c ? `Color ${c}` : 'Automático',
-        style: c ? { background: `var(--n${c})` } : null,
-        onclick: () => { if (cur !== c) setColor(c); }
-      }, c ? null : 'auto'))));
-  }
-  async function setColor(c) {
-    const me = S.users[S.me.id], old = me.color;
-    const redraw = () => { refreshAll(); renderChat(); };
-    me.color = c; redraw();
-    try { await api('/api/color', { color: c }); } catch (x) { me.color = old; redraw(); toast(errMsg(x)); }
+        stat('Posts:', S.posts.filter(p => p.uid === S.me.id).length),
+        stat('Arte:', S.art.filter(a => a.uid === S.me.id).length)));
   }
 
   function squareImage(file, size, type) {
@@ -399,7 +353,7 @@
     R.tickerText.textContent = [
       '★ Bienvenidos a Upipination',
       nx ? `★ Lo que viene: ${nx.title} · ${fmt(nx).dateText}` : '★ No hay eventos todavía, armá uno',
-      `★ ${S.totals.posts} posts en el muro`,
+      `★ ${S.posts.length} posts en el muro`,
       '★ Subí tu arte a la galería',
       '★ Buena onda siempre'
     ].join('       ');
@@ -413,11 +367,11 @@
     } else {
       R.nextBox.replaceChildren(h('span', { class: 'muted' }, 'Todavía no hay nada planeado.'), goEvent);
     }
-    const recent = S.recentPosts;
+    const recent = S.posts.slice(0, 3);
     R.recentPosts.replaceChildren(...(recent.length ? recent.map(p => h('div', { class: 'recent' },
-      h('button', { class: 'linkbtn', type: 'button', onclick: () => openPost(p.id) }, p.text || 'Compartió fotos o videos'),
+      h('button', { class: 'linkbtn', type: 'button', onclick: () => setTab('posts') }, p.text || 'Compartió fotos o videos'),
       h('span', { class: 'tiny muted' }, `por ${userOf(p.uid).name} · ${ago(p.ts)}`))) : [h('div', { class: 'recent small muted' }, 'Todavía no hay posts.')]));
-    const art = S.recentArt;
+    const art = S.art.slice(0, 6);
     R.recentArt.replaceChildren(art.length
       ? h('div', { class: 'grid3' }, art.map(a => h('button', { class: 'thumb', type: 'button', onclick: () => openLightbox(up(a.file), `${userOf(a.uid).name} · ${ago(a.ts)}`) }, h('img', { src: up(a.file), alt: '', loading: 'lazy' }))))
       : h('button', { class: 'linkbtn', type: 'button', onclick: () => setTab('art') }, '» Subí el primero'));
@@ -425,14 +379,6 @@
   function openLightbox(src, caption) {
     if (!src) return;
     R.lightbox.replaceChildren(h('figure', { class: 'box' }, h('div', { class: 'bar' }, caption), h('img', { src, alt: '' })));
-    R.lightbox.classList.remove('hidden');
-  }
-  function openAvatar(uid) {
-    const u = userOf(uid);
-    if (!up(u.avatar)) return;
-    R.lightbox.replaceChildren(h('div', { class: 'av-preview' },
-      h('img', { src: up(u.avatar), alt: `Foto de ${u.name}` }),
-      h('b', { style: { color: colorOf(uid) } }, u.name)));
     R.lightbox.classList.remove('hidden');
   }
 
@@ -451,50 +397,8 @@
     const saved = {};
     let focusKey = null;
     R.secList.querySelectorAll('input[data-k]').forEach(i => { if (i.value) saved[i.dataset.k] = i.value; if (i === document.activeElement) focusKey = i.dataset.k; });
-    const paged = S.tab === 'posts' || S.tab === 'art';
-    const items = S.tab === 'posts' ? postsList() : S.tab === 'event' ? eventsList() : S.tab === 'art' ? artList() : notifsList();
-    R.secList.replaceChildren(...(paged ? [pager(S.tab), ...items, pager(S.tab)] : items));
+    R.secList.replaceChildren(...(S.tab === 'posts' ? postsList() : S.tab === 'event' ? eventsList() : S.tab === 'art' ? artList() : notifsList()));
     R.secList.querySelectorAll('input[data-k]').forEach(i => { if (saved[i.dataset.k]) i.value = saved[i.dataset.k]; if (focusKey === i.dataset.k) i.focus(); });
-  }
-
-  // ---------- pages for posts and art ----------
-  // e.g. page 5 of 9 -> 1 … 4 5 6 … 9
-  function pageNums(p, n) {
-    const keep = [...new Set([1, p - 1, p, p + 1, n])].filter(x => x >= 1 && x <= n).sort((a, b) => a - b);
-    const out = [];
-    keep.forEach((x, i) => {
-      const gap = i ? x - keep[i - 1] : 1;
-      if (gap === 2) out.push(x - 1);
-      else if (gap > 2) out.push('…');
-      out.push(x);
-    });
-    return out;
-  }
-  function pager(kind) {
-    const { page, pages } = S.pg[kind];
-    if (pages <= 1) return null;
-    const go = n => h('button', { type: 'button', class: 'btn' + (n === page ? ' on' : ''), 'aria-current': n === page ? 'page' : null, onclick: () => goPage(kind, n) }, String(n));
-    return h('nav', { class: 'pager', 'aria-label': 'Páginas' },
-      h('button', { type: 'button', class: 'btn', disabled: page <= 1, onclick: () => goPage(kind, page - 1) }, '« Anterior'),
-      pageNums(page, pages).map(n => (n === '…' ? h('span', { class: 'muted' }, '…') : go(n))),
-      h('button', { type: 'button', class: 'btn', disabled: page >= pages, onclick: () => goPage(kind, page + 1) }, 'Siguiente »'));
-  }
-  async function goPage(kind, n) {
-    try { if (!(await fetchPage(kind, 'page=' + n))) return; } catch (x) { return toast(errMsg(x)); }
-    if (S.tab !== kind) return;
-    updateSection();
-    R.secTitle.scrollIntoView({ block: 'start', behavior: 'smooth' });
-  }
-  // shows a post wherever it is, loading its page if needed
-  async function openPost(id) {
-    setTab('posts');
-    const find = () => R.secList.querySelector(`[data-post="${id}"]`);
-    if (!find()) {
-      try { await fetchPage('posts', 'post=' + id); } catch (x) { return toast(errMsg(x)); }
-      if (S.tab === 'posts') updateSection();
-    }
-    const el = find();
-    return el ? flash(el) : toast('Ese post ya no está.');
   }
 
   function postComposer() {
@@ -525,8 +429,6 @@
         btn.disabled = true; btn.textContent = 'Subiendo...';
         try {
           await api('/api/posts', fd, true);
-          S.pg.posts.page = 1;
-          reload();
           text.value = '';
           files.forEach(x => URL.revokeObjectURL(x.url));
           files = [];
@@ -539,12 +441,14 @@
   }
   function postsList() {
     if (!S.posts.length) return [h('div', { class: 'empty' }, h('b', null, 'Todavía no hay posts.'), ' Sé el primero en compartir algo.')];
+    const counts = {};
+    S.posts.forEach(p => { counts[p.uid] = (counts[p.uid] || 0) + 1; });
     return S.posts.map(p => {
       const u = userOf(p.uid);
       const cin = h('input', { class: 'input', maxLength: 1000, placeholder: 'Escribí un comentario', autocomplete: 'off', 'data-k': 'c' + p.id });
       withMentions(cin);
       return h('article', { class: 'post', 'data-post': p.id },
-        h('div', { class: 'post-author' }, h('b', { style: { fontSize: '13px', color: colorOf(p.uid) } }, u.name), avatar(p.uid, 64, true), h('span', { class: 'tiny muted' }, 'Posts: ' + (S.counts.posts[p.uid] || 0))),
+        h('div', { class: 'post-author' }, h('b', { style: { fontSize: '13px', color: colorOf(p.uid) } }, u.name), avatar(p.uid, 64), h('span', { class: 'tiny muted' }, 'Posts: ' + counts[p.uid])),
         h('div', { class: 'post-main' },
           h('div', { class: 'post-meta' }, 'Publicado ' + ago(p.ts)),
           h('div', { class: 'post-body' },
@@ -594,7 +498,7 @@
       btn,
       n ? h('div', { class: 'yeah-who' },
         h('div', { class: 'small' }, n === 1 ? '1 persona le dio un Yeah.' : `${n} personas le dieron un Yeah.`),
-        h('div', { class: 'yeah-avs' }, p.yeahs.map(id => h('span', { title: userOf(id).name }, avatar(id, 36, true))))) : null);
+        h('div', { class: 'yeah-avs' }, p.yeahs.map(id => h('span', { title: userOf(id).name }, avatar(id, 36))))) : null);
   }
 
   function eventControls() {
@@ -659,7 +563,7 @@
         if (!list.length) return;
         const fd = new FormData();
         list.forEach(f => fd.append('files', f));
-        try { await api('/api/art', fd, true); S.pg.art.page = 1; reload(); } catch (x) { toast(errMsg(x)); }
+        try { await api('/api/art', fd, true); } catch (x) { toast(errMsg(x)); }
       }
     });
     return [h('div', { class: 'end' }, h('label', { class: 'btn' }, 'Subir arte', pick))];
@@ -704,7 +608,7 @@
     if (m.sys) return h('div', { class: 'msg sys', 'data-chat': m.id }, `[${clock(m.ts)}] *** ${m.text}`);
     const body = h('span', { class: 'msg-text' }, rich(m.text));
     if (up(m.gif)) body.append(h('img', { class: 'msg-gif', src: up(m.gif), alt: 'GIF', loading: 'lazy' }));
-    return h('div', { class: 'msg' + (m.uid !== S.me.id && mentionsMe(m.text) ? ' tagged' : ''), 'data-chat': m.id }, h('span', { class: 'time' }, `[${clock(m.ts)}]`), avatar(m.uid, 22, true), h('b', { class: 'nick', style: { color: colorOf(m.uid) } }, userOf(m.uid).name + ':'), body);
+    return h('div', { class: 'msg' + (m.uid !== S.me.id && mentionsMe(m.text) ? ' tagged' : ''), 'data-chat': m.id }, h('span', { class: 'time' }, `[${clock(m.ts)}]`), avatar(m.uid, 22), h('b', { class: 'nick', style: { color: colorOf(m.uid) } }, userOf(m.uid).name + ':'), body);
   }
   const nearBottom = () => R.log.scrollHeight - R.log.scrollTop - R.log.clientHeight < 80;
   function stick() { R.log.scrollTop = R.log.scrollHeight; setTimeout(() => { R.log.scrollTop = R.log.scrollHeight; }, 400); }
@@ -888,7 +792,9 @@
       const el = R.log.querySelector(`[data-chat="${n.chat}"]`);
       return el ? flash(el) : toast('Ese mensaje ya es muy viejo para mostrarlo en el chat.');
     }
-    return openPost(n.post);
+    setTab('posts');
+    const el = R.secList.querySelector(`[data-post="${n.post}"]`);
+    return el ? flash(el) : toast('Ese post ya no está.');
   }
 
   function togglePicker(kind) {
