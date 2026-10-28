@@ -83,7 +83,7 @@ textarea.input { min-height: 70px; resize: vertical; }
 .time { flex: none; font-size: 11px; color: var(--muted); }
 .nick { flex: none; }
 .msg-text { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.msg-text img.ce { display: inline-block; width: 20px; height: 20px; object-fit: contain; vertical-align: -5px; }
+.msg-text img.ce { display: inline-block; width: 40px; height: 40px; object-fit: contain; vertical-align: middle; }
 .msg-gif { display: block; max-width: 220px; max-height: 180px; margin-top: 4px; border: 1px solid var(--border); }
 .typing { padding: 2px 9px; font-size: 11px; font-style: italic; color: var(--muted); min-height: 19px; background: var(--row2); }
 .composer { display: flex; align-items: center; gap: 5px; padding: 7px 8px; border-top: 1px solid var(--border); background: var(--row); }
@@ -96,9 +96,9 @@ textarea.input { min-height: 70px; resize: vertical; }
 .emoji-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(34px, 1fr)); gap: 2px; }
 .emoji-grid button { border: 1px solid transparent; background: transparent; cursor: pointer; font-size: 20px; line-height: 1; padding: 5px 0; }
 .emoji-grid button:hover, .ce-grid button:hover { border-color: var(--border); background: var(--row); }
-.ce-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(60px, 1fr)); gap: 4px; }
+.ce-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 4px; }
 .ce-grid button { border: 1px solid transparent; background: transparent; cursor: pointer; padding: 5px 2px; display: flex; flex-direction: column; align-items: center; gap: 3px; color: var(--text); font: 10px Verdana, sans-serif; min-width: 0; }
-.ce-grid img { width: 30px; height: 30px; object-fit: contain; }
+.ce-grid img { width: 60px; height: 60px; object-fit: contain; }
 .ce-grid span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 5px; }
 .thumb { padding: 2px; border: 1px solid var(--border); aspect-ratio: 1; cursor: pointer; background: var(--input); }
