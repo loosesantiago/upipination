@@ -735,7 +735,7 @@
       ? h('div', { class: 'ce-grid' }, custom.map(x => h('button', { type: 'button', title: `:${x.name}:`, onclick: () => add(`:${x.name}: `) }, h('img', { src: up(x.file), alt: '' }), h('span', null, `:${x.name}:`))))
       : h('div', { class: 'small muted' }, 'Todavía no hay emotes. Creálos desde el chat con el botón ☺.');
     E.el.replaceChildren(
-      h('div', { class: 'picker-tabs' }, h('span', { class: 'tab on', style: 'cursor: default' }, 'Emotes'), h('span', { class: 'spacer' }), h('button', { type: 'button', class: 'linkbtn', onclick: closeEmojis }, '[cerrar]')),
+      h('div', { class: 'picker-tabs' }, h('span', { class: 'tab on static' }, 'Emotes'), h('span', { class: 'spacer' }), h('button', { type: 'button', class: 'linkbtn', onclick: closeEmojis }, '[cerrar]')),
       h('div', { class: 'picker-body' }, body));
     E.el.classList.remove('hidden');
     place(E.el, E.anchor.isConnected ? E.anchor : live(E.target) || E.anchor);
@@ -832,7 +832,7 @@
     const body = [form, h('div', { class: 'small muted' }, 'Usalos en el chat y en los posts escribiendo :nombre: o tocándolos acá.'),
       S.emojis.length ? h('div', { class: 'ce-grid' }, S.emojis.filter(x => up(x.file)).map(x => h('button', { type: 'button', title: `:${x.name}:`, onclick: () => insert(`:${x.name}: `) }, h('img', { src: up(x.file), alt: '' }), h('span', null, `:${x.name}:`)))) : null];
     R.picker.replaceChildren(
-      h('div', { class: 'picker-tabs' }, h('span', { class: 'tab on', style: 'cursor: default' }, 'Emotes'), h('span', { class: 'spacer' }), h('button', { type: 'button', class: 'linkbtn', onclick: () => { S.picker = null; updatePicker(); } }, '[cerrar]')),
+      h('div', { class: 'picker-tabs' }, h('span', { class: 'tab on static' }, 'Emotes'), h('span', { class: 'spacer' }), h('button', { type: 'button', class: 'linkbtn', onclick: () => { S.picker = null; updatePicker(); } }, '[cerrar]')),
       h('div', { class: 'picker-body' }, body));
   }
 
