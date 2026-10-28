@@ -93,6 +93,9 @@ const q = {
   emojis: db.prepare('SELECT name, file, user_id AS uid FROM emojis ORDER BY name'),
   emojiGet: db.prepare('SELECT * FROM emojis WHERE name = ?'),
   emojiPut: db.prepare('INSERT OR REPLACE INTO emojis (name, file, user_id) VALUES (?, ?, ?)'),
+  gifs: db.prepare('SELECT id, file FROM gifs ORDER BY id DESC LIMIT 300'),
+  gifById: db.prepare('SELECT file FROM gifs WHERE id = ?'),
+  addGif: db.prepare('INSERT INTO gifs (file, user_id, ts) VALUES (?, ?, ?)'),
   postAuthor: db.prepare('SELECT user_id FROM posts WHERE id = ?'),
   addNotif: db.prepare('INSERT INTO notifs (user_id, actor_id, kind, post_id, comment_id, chat_id, ts) VALUES (?, ?, ?, ?, ?, ?, ?)'),
   notifs: db.prepare(`SELECT n.id, n.actor_id AS actor, n.kind, n.post_id AS post, n.chat_id AS chat, n.ts, n.seen,
@@ -369,6 +372,7 @@ app.get('/api/state', requireUser, (req, res) => {
     events: q.events.all(since).map(e => ({ ...e, going: goingBy[e.id] || [] })),
     art: q.art.all(),
     emojis: q.emojis.all(),
+    gifs: q.gifs.all(),
     notifs: q.notifs.all(req.user.id).map(n => ({ ...n, seen: !!n.seen })),
     stats: { messages: q.myMessages.get(req.user.id).n }
   });
@@ -482,7 +486,16 @@ app.post('/api/emojis', requireUser, files('file', 1), (req, res) => {
   const [file] = keep(list, IMG, 1.5e6);
   q.emojiPut.run(name, file, req.user.id);
   if (existing && FILE_RE.test(existing.file)) fs.rmSync(path.join(UP, existing.file), { force: true });
-  sys(`${req.user.name} creó el emote :${name}:`);
+  sys(`${req.user.name} creó el emoji :${name}:`);
+  changed();
+  res.json({ ok: true });
+});
+
+app.post('/api/gifs', requireUser, files('files', 6), (req, res) => {
+  const list = req.files || [];
+  if (!list.length) return res.status(400).json({ error: 'file' });
+  const t = now();
+  for (const f of keep(list, ['gif', 'webp'])) q.addGif.run(f, req.user.id, t);
   changed();
   res.json({ ok: true });
 });
@@ -559,11 +572,18 @@ io.on('connection', socket => {
     if (t - windowStart > 10e3) { windowStart = t; count = 0; }
     if (++count > 8) return reply({ error: 'rate' });
     if (!msg || typeof msg !== 'object') return reply({ error: 'bad' });
-    const text = clean(msg.text, 1000, 1);
-    if (!text) return reply({ error: 'bad' });
-    const chatId = Number(q.addChat.run(uid, text, null, 0, t).lastInsertRowid);
+    let text = null, gif = null;
+    if (msg.gif != null) {
+      const g = q.gifById.get(toId(msg.gif));
+      if (!g) return reply({ error: 'bad' });
+      gif = g.file;
+    } else {
+      text = clean(msg.text, 1000, 1);
+      if (!text) return reply({ error: 'bad' });
+    }
+    const chatId = Number(q.addChat.run(uid, text, gif, 0, t).lastInsertRowid);
     emitChat(chatId);
-    notify(mentionedIds(text, uid), uid, 'chat', { chat: chatId }, t);
+    if (text) notify(mentionedIds(text, uid), uid, 'chat', { chat: chatId }, t);
     reply({ ok: true });
   });
 
