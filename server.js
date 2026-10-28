@@ -49,6 +49,8 @@ CREATE TABLE IF NOT EXISTS going (event_id INTEGER NOT NULL REFERENCES events(id
 CREATE TABLE IF NOT EXISTS art (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, file TEXT NOT NULL, ts INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS emojis (name TEXT PRIMARY KEY, file TEXT NOT NULL, user_id INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS gifs (id INTEGER PRIMARY KEY, file TEXT NOT NULL, user_id INTEGER NOT NULL, ts INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS notifs (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, actor_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, kind TEXT NOT NULL, post_id INTEGER REFERENCES posts(id) ON DELETE CASCADE, comment_id INTEGER REFERENCES comments(id) ON DELETE CASCADE, chat_id INTEGER REFERENCES chat(id) ON DELETE CASCADE, ts INTEGER NOT NULL, seen INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX IF NOT EXISTS notifs_user ON notifs(user_id, id);
 `);
 
 const q = {
@@ -88,7 +90,15 @@ const q = {
   emojiPut: db.prepare('INSERT OR REPLACE INTO emojis (name, file, user_id) VALUES (?, ?, ?)'),
   gifs: db.prepare('SELECT id, file FROM gifs ORDER BY id DESC LIMIT 300'),
   gifById: db.prepare('SELECT file FROM gifs WHERE id = ?'),
-  addGif: db.prepare('INSERT INTO gifs (file, user_id, ts) VALUES (?, ?, ?)')
+  addGif: db.prepare('INSERT INTO gifs (file, user_id, ts) VALUES (?, ?, ?)'),
+  postAuthor: db.prepare('SELECT user_id FROM posts WHERE id = ?'),
+  addNotif: db.prepare('INSERT INTO notifs (user_id, actor_id, kind, post_id, comment_id, chat_id, ts) VALUES (?, ?, ?, ?, ?, ?, ?)'),
+  notifs: db.prepare(`SELECT n.id, n.actor_id AS actor, n.kind, n.post_id AS post, n.chat_id AS chat, n.ts, n.seen,
+    substr(COALESCE(c.text, ch.text, p.text, ''), 1, 200) AS text
+    FROM notifs n LEFT JOIN comments c ON c.id = n.comment_id LEFT JOIN chat ch ON ch.id = n.chat_id LEFT JOIN posts p ON p.id = n.post_id
+    WHERE n.user_id = ? ORDER BY n.id DESC LIMIT 100`),
+  seenNotifs: db.prepare('UPDATE notifs SET seen = 1 WHERE user_id = ? AND seen = 0'),
+  purgeNotifs: db.prepare('DELETE FROM notifs WHERE ts < ?')
 };
 
 // ---------- helpers ----------
@@ -99,6 +109,25 @@ const toId = v => (/^\d{1,12}$/.test(String(v)) ? Number(v) : 0);
 const A = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 const pub = u => ({ id: u.id, name: u.name, avatar: u.avatar || null });
 const FILE_RE = /^[a-f0-9]{32}\.(jpg|png|gif|webp|mp4|webm|mov)$/;
+
+// @mentions use display names (which may contain spaces). Longest names are matched first,
+// so "@Ana María" tags Ana María and not also Ana.
+const WORD = /[\p{L}\p{N}_]/u;
+function mentionedIds(text, actorId) {
+  if (!text || !text.includes('@')) return [];
+  let low = text.toLowerCase();
+  const ids = [];
+  const users = q.users.all().sort((a, b) => b.name.length - a.name.length);
+  for (const u of users) {
+    const tag = '@' + u.name.toLowerCase();
+    for (let i = low.indexOf(tag); i !== -1; i = low.indexOf(tag, i + 1)) {
+      if ((i > 0 && WORD.test(low.charAt(i - 1))) || WORD.test(low.charAt(i + tag.length))) continue;
+      low = low.slice(0, i) + ' '.repeat(tag.length) + low.slice(i + tag.length);
+      if (!ids.includes(u.id)) ids.push(u.id);
+    }
+  }
+  return ids.filter(id => id !== actorId);
+}
 
 // strips control and bidi-override characters, trims, checks length
 function clean(v, max, min = 0) {
@@ -332,6 +361,7 @@ app.get('/api/state', requireUser, (req, res) => {
     art: q.art.all(),
     emojis: q.emojis.all(),
     gifs: q.gifs.all(),
+    notifs: q.notifs.all(req.user.id).map(n => ({ ...n, seen: !!n.seen })),
     stats: { messages: q.myMessages.get(req.user.id).n }
   });
 });
@@ -363,7 +393,9 @@ app.post('/api/posts', requireUser, files('files', 6), (req, res) => {
   const text = clean(req.body?.text ?? '', 2000);
   if (text === null || (!text && !list.length)) { drop(list); return res.status(400).json({ error: 'empty' }); }
   const media = keep(list, MEDIA);
-  q.addPost.run(req.user.id, text, JSON.stringify(media), now());
+  const t = now();
+  const postId = Number(q.addPost.run(req.user.id, text, JSON.stringify(media), t).lastInsertRowid);
+  notify(mentionedIds(text, req.user.id), req.user.id, 'post', { post: postId }, t);
   changed();
   res.json({ ok: true });
 });
@@ -372,8 +404,18 @@ app.post('/api/posts/:id/comments', requireUser, (req, res) => {
   const id = toId(req.params.id);
   const text = clean(req.body?.text, 1000, 1);
   if (!id || !text || !q.postExists.get(id)) return res.status(400).json({ error: 'bad_request' });
-  q.addComment.run(id, req.user.id, text, now());
+  const t = now();
+  const commentId = Number(q.addComment.run(id, req.user.id, text, t).lastInsertRowid);
+  const tagged = mentionedIds(text, req.user.id);
+  notify(tagged, req.user.id, 'comment_mention', { post: id, comment: commentId }, t);
+  const author = q.postAuthor.get(id).user_id;
+  if (author !== req.user.id && !tagged.includes(author)) notify([author], req.user.id, 'comment', { post: id, comment: commentId }, t);
   changed();
+  res.json({ ok: true });
+});
+
+app.post('/api/notifs/seen', requireUser, (req, res) => {
+  if (q.seenNotifs.run(req.user.id).changes) io.to('u' + req.user.id).emit('notif');
   res.json({ ok: true });
 });
 
@@ -479,12 +521,19 @@ function emitChat(id) {
   if (row) io.emit('chat', { ...row, sys: !!row.sys });
 }
 function sys(text) { emitChat(Number(q.addChat.run(null, text, null, 1, now()).lastInsertRowid)); }
+function notify(ids, actorId, kind, ref, ts) {
+  for (const id of ids) {
+    q.addNotif.run(id, actorId, kind, ref.post || null, ref.comment || null, ref.chat || null, ts);
+    io.to('u' + id).emit('notif');
+  }
+}
 function kickSession(h) {
   for (const s of io.of('/').sockets.values()) if (s.data.sid === h) { s.emit('logout'); s.disconnect(true); }
 }
 
 io.on('connection', socket => {
   const uid = socket.data.uid;
+  socket.join('u' + uid);
   online.set(uid, (online.get(uid) || 0) + 1);
   presence();
   let windowStart = now(), count = 0, lastTyping = 0;
@@ -505,7 +554,9 @@ io.on('connection', socket => {
       text = clean(msg.text, 1000, 1);
       if (!text) return reply({ error: 'bad' });
     }
-    emitChat(Number(q.addChat.run(uid, text, gif, 0, t).lastInsertRowid));
+    const chatId = Number(q.addChat.run(uid, text, gif, 0, t).lastInsertRowid);
+    emitChat(chatId);
+    if (text) notify(mentionedIds(text, uid), uid, 'chat', { chat: chatId }, t);
     reply({ ok: true });
   });
 
@@ -528,6 +579,7 @@ setInterval(() => {
   const t = now();
   q.purge.run(t);
   q.purgeGate.run(t, config.v);
+  q.purgeNotifs.run(t - 60 * DAY);
   for (const [k, f] of fails) if (f.until < t && t - f.last > 60 * 60e3) fails.delete(k);
 }, 30 * 60e3).unref();
 

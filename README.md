@@ -8,7 +8,7 @@ Commands are for Ubuntu, Debian or Linux Mint. Do the steps in order. Anything i
 
 | File | What it is |
 | --- | --- |
-| `server.js` | The server: accounts, chat, posts, events, art, uploads |
+| `server.js` | The server: accounts, chat, posts, events, art, notifications, uploads |
 | `setup.js` | Sets the group password. Only a one-way hash is stored |
 | `public/` | The page the browser loads |
 | `assets/` | Your cat photos for the header (only visible after logging in) |
