@@ -253,7 +253,12 @@ app.use(helmet({
   },
   referrerPolicy: { policy: 'same-origin' }
 }));
-app.use((req, res, next) => { res.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()'); next(); });
+app.use((req, res, next) => {
+  res.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+  // tell search engines never to index or show anything from this site (covers images/files too)
+  res.set('X-Robots-Tag', 'noindex, nofollow, noarchive, noimageindex');
+  next();
+});
 
 const limit = (minutes, max) => rateLimit({
   windowMs: minutes * 60e3, limit: max, standardHeaders: 'draft-7', legacyHeaders: false,
