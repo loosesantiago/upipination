@@ -456,6 +456,7 @@
             p.media.length ? h('div', { class: 'media' }, p.media.filter(up).map(f => h('div', null, isVideo(f)
               ? h('video', { src: up(f), controls: true, preload: 'metadata' })
               : h('img', { src: up(f), alt: '', loading: 'lazy', onclick: () => openLightbox(up(f), `${u.name} · ${ago(p.ts)}`) })))) : null),
+          yeahBar(p),
           h('div', { class: 'comments' },
             p.comments.map(c => h('div', { class: 'comment' }, h('b', { style: { color: colorOf(c.uid) } }, userOf(c.uid).name + ':'), h('span', { class: 'comment-text' }, rich(c.text)), h('span', { class: 'when' }, ago(c.ts)))),
             h('form', {
@@ -468,6 +469,36 @@
               }
             }, cin, emojiBtn(cin), h('button', { class: 'btn', type: 'submit' }, 'Responder')))));
     });
+  }
+
+  // "Yeah..." reaction: a little head with a plus, like a thumbs-up
+  function yeahIcon() {
+    const NS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 20');
+    svg.setAttribute('class', 'yeah-ico');
+    svg.setAttribute('aria-hidden', 'true');
+    const add = (tag, attrs) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); svg.append(e); };
+    add('circle', { cx: 8, cy: 8, r: 6.5, fill: 'currentColor' });
+    add('path', { d: 'M1 20c0-4 3-6 7-6s7 2 7 6z', fill: 'currentColor' });
+    add('circle', { cx: 6, cy: 7.5, r: 1, class: 'yeah-eye' });
+    add('circle', { cx: 10, cy: 7.5, r: 1, class: 'yeah-eye' });
+    add('path', { d: 'M19 9v8M15 13h8', stroke: 'currentColor', 'stroke-width': 2.4, 'stroke-linecap': 'round' });
+    return svg;
+  }
+  function yeahBar(p) {
+    const mine = p.yeahs.includes(S.me.id);
+    const n = p.yeahs.length;
+    const btn = h('button', {
+      type: 'button', class: 'btn yeah-btn' + (mine ? ' on' : ''), 'aria-pressed': String(mine),
+      title: mine ? 'Sacar tu Yeah' : 'Dar un Yeah',
+      onclick: () => { btn.disabled = true; api(`/api/posts/${p.id}/yeah`, {}).catch(x => { btn.disabled = false; toast(errMsg(x)); }); }
+    }, yeahIcon(), 'Yeah...');
+    return h('div', { class: 'yeah' },
+      btn,
+      n ? h('div', { class: 'yeah-who' },
+        h('div', { class: 'small' }, n === 1 ? '1 persona le dio un Yeah.' : `${n} personas le dieron un Yeah.`),
+        h('div', { class: 'yeah-avs' }, p.yeahs.map(id => h('span', { title: userOf(id).name }, avatar(id, 36))))) : null);
   }
 
   function eventControls() {
@@ -725,7 +756,8 @@
     chat: 'te etiquetó en el chat',
     post: 'te etiquetó en un post',
     comment_mention: 'te etiquetó en un comentario',
-    comment: 'comentó tu post'
+    comment: 'comentó tu post',
+    yeah: 'le dio un Yeah a tu post'
   };
   const unread = () => S.notifs.filter(n => !n.seen).length;
   function updateBadge() {
@@ -742,7 +774,7 @@
     document.title = n ? `(${n}) Upipination` : 'Upipination';
   }
   function notifsList() {
-    if (!S.notifs.length) return [h('div', { class: 'empty' }, h('b', null, 'No tenés notificaciones.'), ' Cuando alguien te etiquete con @ o comente tus posts, aparece acá.')];
+    if (!S.notifs.length) return [h('div', { class: 'empty' }, h('b', null, 'No tenés notificaciones.'), ' Cuando alguien te etiquete con @, comente tus posts o les dé un Yeah, aparece acá.')];
     return [h('div', { class: 'notifs' }, S.notifs.map(n => h('button', {
       type: 'button', class: 'notif' + (R.fresh && R.fresh.has(n.id) ? ' new' : ''), onclick: () => openNotif(n)
     },

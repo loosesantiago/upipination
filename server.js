@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS emojis (name TEXT PRIMARY KEY, file TEXT NOT NULL, us
 CREATE TABLE IF NOT EXISTS gifs (id INTEGER PRIMARY KEY, file TEXT NOT NULL, user_id INTEGER NOT NULL, ts INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS notifs (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, actor_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, kind TEXT NOT NULL, post_id INTEGER REFERENCES posts(id) ON DELETE CASCADE, comment_id INTEGER REFERENCES comments(id) ON DELETE CASCADE, chat_id INTEGER REFERENCES chat(id) ON DELETE CASCADE, ts INTEGER NOT NULL, seen INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS notifs_user ON notifs(user_id, id);
+CREATE TABLE IF NOT EXISTS yeahs (post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, ts INTEGER NOT NULL, PRIMARY KEY (post_id, user_id));
 `);
 
 const q = {
@@ -75,6 +76,10 @@ const q = {
   posts: db.prepare('SELECT id, user_id AS uid, text, media, ts FROM posts ORDER BY id DESC LIMIT 200'),
   comments: db.prepare('SELECT id, post_id, user_id AS uid, text, ts FROM comments WHERE post_id IN (SELECT id FROM posts ORDER BY id DESC LIMIT 200) ORDER BY id'),
   postExists: db.prepare('SELECT 1 FROM posts WHERE id = ?'),
+  yeahs: db.prepare('SELECT post_id, user_id FROM yeahs WHERE post_id IN (SELECT id FROM posts ORDER BY id DESC LIMIT 200) ORDER BY ts'),
+  addYeah: db.prepare('INSERT OR IGNORE INTO yeahs (post_id, user_id, ts) VALUES (?, ?, ?)'),
+  delYeah: db.prepare('DELETE FROM yeahs WHERE post_id = ? AND user_id = ?'),
+  yeahNotified: db.prepare("SELECT 1 FROM notifs WHERE kind = 'yeah' AND post_id = ? AND actor_id = ?"),
   addPost: db.prepare('INSERT INTO posts (user_id, text, media, ts) VALUES (?, ?, ?, ?)'),
   addComment: db.prepare('INSERT INTO comments (post_id, user_id, text, ts) VALUES (?, ?, ?, ?)'),
   events: db.prepare('SELECT id, user_id AS uid, title, date, time, place, note FROM events WHERE date >= ? ORDER BY date, time'),
@@ -353,6 +358,8 @@ app.post('/api/logout', (req, res) => {
 app.get('/api/state', requireUser, (req, res) => {
   const byPost = {};
   for (const c of q.comments.all()) (byPost[c.post_id] ||= []).push({ id: c.id, uid: c.uid, text: c.text, ts: c.ts });
+  const yeahsBy = {};
+  for (const y of q.yeahs.all()) (yeahsBy[y.post_id] ||= []).push(y.user_id);
   const goingBy = {};
   for (const g of q.going.all()) (goingBy[g.event_id] ||= []).push(g.user_id);
   const since = new Date(now() - 2 * DAY).toISOString().slice(0, 10);
@@ -361,7 +368,7 @@ app.get('/api/state', requireUser, (req, res) => {
     users: q.users.all(),
     online: [...online.keys()],
     chat: q.recentChat.all().map(c => ({ ...c, sys: !!c.sys })),
-    posts: q.posts.all().map(p => ({ ...p, media: JSON.parse(p.media), comments: byPost[p.id] || [] })),
+    posts: q.posts.all().map(p => ({ ...p, media: JSON.parse(p.media), comments: byPost[p.id] || [], yeahs: yeahsBy[p.id] || [] })),
     events: q.events.all(since).map(e => ({ ...e, going: goingBy[e.id] || [] })),
     art: q.art.all(),
     emojis: q.emojis.all(),
@@ -415,6 +422,20 @@ app.post('/api/posts/:id/comments', requireUser, (req, res) => {
   notify(tagged, req.user.id, 'comment_mention', { post: id, comment: commentId }, t);
   const author = q.postAuthor.get(id).user_id;
   if (author !== req.user.id && !tagged.includes(author)) notify([author], req.user.id, 'comment', { post: id, comment: commentId }, t);
+  changed();
+  res.json({ ok: true });
+});
+
+// "Yeah..." reaction: press again to take it back
+app.post('/api/posts/:id/yeah', requireUser, (req, res) => {
+  const id = toId(req.params.id);
+  if (!id || !q.postExists.get(id)) return res.status(400).json({ error: 'bad_request' });
+  if (q.delYeah.run(id, req.user.id).changes === 0) {
+    q.addYeah.run(id, req.user.id, now());
+    // notify the author once per person, so toggling on and off doesn't spam them
+    const author = q.postAuthor.get(id).user_id;
+    if (author !== req.user.id && !q.yeahNotified.get(id, req.user.id)) notify([author], req.user.id, 'yeah', { post: id }, now());
+  }
   changed();
   res.json({ ok: true });
 });
