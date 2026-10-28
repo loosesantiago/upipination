@@ -4,7 +4,7 @@
   const FILE_RE = /^[a-f0-9]{32}\.(jpg|png|gif|webp|mp4|webm|mov)$/;
   const EMOJIS = '😀 😂 🤣 😊 😍 🥰 😘 😎 🤩 🥳 😏 😅 😭 😡 🤯 😴 🤔 🙄 😬 🤗 🫠 🥲 😇 🤠 👍 👎 👏 🙌 🙏 💪 🤝 ✌️ 🤘 👀 💀 👻 ❤️ 🧡 💛 💚 💙 💜 🖤 💔 🔥 ✨ ⭐ 🎉 🎂 🍕 🍔 🍺 🍷 🧉 ☕ 🎲 🎮 🎨 🖌️ 📸 🎵 ⚽ 🌙 ☀️ 🌈 🐶 🐱 🦊 🐸 🦄'.split(' ');
   const app = document.getElementById('app');
-  const S = { me: null, users: {}, chat: [], posts: [], events: [], art: [], emojis: [], gifs: [], online: [], stats: { messages: 0 }, tab: 'posts', picker: null, typing: {}, dark: false };
+  const S = { me: null, users: {}, chat: [], posts: [], events: [], art: [], emojis: [], gifs: [], notifs: [], online: [], stats: { messages: 0 }, tab: 'posts', picker: null, typing: {}, dark: false };
   const R = {};
   let sock = null;
   try { S.dark = localStorage.getItem('upi_theme') === 'dark'; } catch (e) {}
@@ -168,7 +168,8 @@
     const st = await api('/api/state');
     S.me = st.me; S.users = {};
     st.users.forEach(u => { S.users[u.id] = u; });
-    Object.assign(S, { chat: st.chat, posts: st.posts, events: st.events, art: st.art, emojis: st.emojis, gifs: st.gifs, stats: st.stats, online: st.online });
+    Object.assign(S, { chat: st.chat, posts: st.posts, events: st.events, art: st.art, emojis: st.emojis, gifs: st.gifs, notifs: st.notifs, stats: st.stats, online: st.online });
+    buildMentionRe();
   }
   let reloadTimer;
   function reload() {
@@ -198,9 +199,10 @@
         h('span', null, 'Hola de nuevo, ', R.greet, ' · ', h('a', { href: '#', onclick: e => { e.preventDefault(); logout(); } }, 'Cerrar sesión')),
         h('div', { class: 'inline-form' }, R.clock, themeBtn())));
 
-    const TABS = [['posts', 'POSTS'], ['event', 'PRÓXIMO EVENTO'], ['art', 'ARTE']];
+    const TABS = [['posts', 'POSTS'], ['event', 'PRÓXIMO EVENTO'], ['art', 'ARTE'], ['notifs', 'NOTIFICACIONES']];
     R.tabBtns = {};
-    const nav = h('nav', { class: 'nav' }, TABS.map(([id, label]) => (R.tabBtns[id] = h('button', { type: 'button', onclick: () => setTab(id) }, label))));
+    R.badge = h('span', { class: 'badge hidden' });
+    const nav = h('nav', { class: 'nav' }, TABS.map(([id, label]) => (R.tabBtns[id] = h('button', { type: 'button', onclick: () => setTab(id) }, label, id === 'notifs' ? R.badge : null))));
     R.tickerText = h('span');
     const ticker = h('div', { class: 'ticker' }, R.tickerText);
 
@@ -215,7 +217,8 @@
     R.log = h('div', { class: 'log' });
     R.typing = h('div', { class: 'typing' });
     R.picker = h('div', { class: 'picker hidden' });
-    R.chatInput = h('input', { class: 'input', autocomplete: 'off', maxLength: 1000, placeholder: 'Escribile algo al grupo', oninput: typingPing });
+    R.chatInput = h('input', { class: 'input', autocomplete: 'off', maxLength: 1000, placeholder: 'Escribile algo al grupo (usá @ para etiquetar)', oninput: typingPing });
+    withMentions(R.chatInput);
     R.meAv = h('span');
     R.meNick = h('b', { class: 'nick small' });
     const composer = h('form', { class: 'composer', onsubmit: sendChat }, R.meAv, R.meNick, R.chatInput,
@@ -246,7 +249,7 @@
   function refreshAll() {
     updateMe(); updateOnline();
     if (!R.editingNick) updateProfile();
-    updateTicker(); updateSide(); updateSection();
+    updateTicker(); updateSide(); updateBadge(); updateSection();
     if (S.picker === 'gif' || S.picker === 'custom') updatePicker();
   }
   function updateMe() {
@@ -380,26 +383,27 @@
   }
 
   // ---------- section (posts / event / art) ----------
-  const TITLES = { posts: 'Posts', event: 'Próximo evento', art: 'Arte' };
-  function setTab(id) { S.tab = id; updateSection(); }
+  const TITLES = { posts: 'Posts', event: 'Próximo evento', art: 'Arte', notifs: 'Notificaciones' };
+  function setTab(id) { S.tab = id; if (id !== 'notifs') R.fresh = null; updateBadge(); updateSection(); }
   function updateSection() {
     for (const id in R.tabBtns) R.tabBtns[id].classList.toggle('on', S.tab === id);
     if (R.builtTab !== S.tab) {
       R.builtTab = S.tab;
       R.secTitle.textContent = TITLES[S.tab];
       R.secList = h('div', { class: 'list' });
-      const top = S.tab === 'posts' ? [postComposer()] : S.tab === 'event' ? eventControls() : artControls();
+      const top = S.tab === 'posts' ? [postComposer()] : S.tab === 'event' ? eventControls() : S.tab === 'art' ? artControls() : [];
       R.secBody.replaceChildren(...top, R.secList);
     }
     const saved = {};
     let focusKey = null;
     R.secList.querySelectorAll('input[data-k]').forEach(i => { if (i.value) saved[i.dataset.k] = i.value; if (i === document.activeElement) focusKey = i.dataset.k; });
-    R.secList.replaceChildren(...(S.tab === 'posts' ? postsList() : S.tab === 'event' ? eventsList() : artList()));
+    R.secList.replaceChildren(...(S.tab === 'posts' ? postsList() : S.tab === 'event' ? eventsList() : S.tab === 'art' ? artList() : notifsList()));
     R.secList.querySelectorAll('input[data-k]').forEach(i => { if (saved[i.dataset.k]) i.value = saved[i.dataset.k]; if (focusKey === i.dataset.k) i.focus(); });
   }
 
   function postComposer() {
-    const text = h('textarea', { class: 'input', maxLength: 2000, placeholder: 'Compartí algo con el grupo' });
+    const text = h('textarea', { class: 'input', maxLength: 2000, placeholder: 'Compartí algo con el grupo (usá @ para etiquetar)' });
+    withMentions(text);
     let files = [];
     const prev = h('div', { class: 'pending' });
     const drawPrev = () => prev.replaceChildren(...files.map((x, i) => h('div', null,
@@ -433,7 +437,7 @@
         btn.disabled = false; btn.textContent = 'Publicar';
       }
     }, h('span', { class: 'label' }, 'Nuevo post:'), text, prev,
-    h('div', { class: 'inline-form' }, h('label', { class: 'btn' }, 'Foto o video', pick), h('span', { class: 'tiny muted' }, 'Hasta 6 archivos'), h('span', { class: 'spacer' }), btn));
+    h('div', { class: 'inline-form' }, h('label', { class: 'btn' }, 'Foto o video', pick), emojiBtn(text), h('span', { class: 'tiny muted' }, 'Hasta 6 archivos'), h('span', { class: 'spacer' }), btn));
   }
   function postsList() {
     if (!S.posts.length) return [h('div', { class: 'empty' }, h('b', null, 'Todavía no hay posts.'), ' Sé el primero en compartir algo.')];
@@ -442,17 +446,18 @@
     return S.posts.map(p => {
       const u = userOf(p.uid);
       const cin = h('input', { class: 'input', maxLength: 1000, placeholder: 'Escribí un comentario', autocomplete: 'off', 'data-k': 'c' + p.id });
-      return h('article', { class: 'post' },
+      withMentions(cin);
+      return h('article', { class: 'post', 'data-post': p.id },
         h('div', { class: 'post-author' }, h('b', { style: { fontSize: '13px', color: colorOf(p.uid) } }, u.name), avatar(p.uid, 64), h('span', { class: 'tiny muted' }, 'Posts: ' + counts[p.uid])),
         h('div', { class: 'post-main' },
           h('div', { class: 'post-meta' }, 'Publicado ' + ago(p.ts)),
           h('div', { class: 'post-body' },
-            p.text ? h('div', { class: 'post-text' }, p.text) : null,
+            p.text ? h('div', { class: 'post-text' }, rich(p.text)) : null,
             p.media.length ? h('div', { class: 'media' }, p.media.filter(up).map(f => h('div', null, isVideo(f)
               ? h('video', { src: up(f), controls: true, preload: 'metadata' })
               : h('img', { src: up(f), alt: '', loading: 'lazy', onclick: () => openLightbox(up(f), `${u.name} · ${ago(p.ts)}`) })))) : null),
           h('div', { class: 'comments' },
-            p.comments.map(c => h('div', { class: 'comment' }, h('b', { style: { color: colorOf(c.uid) } }, userOf(c.uid).name + ':'), h('span', null, c.text), h('span', { class: 'when' }, ago(c.ts)))),
+            p.comments.map(c => h('div', { class: 'comment' }, h('b', { style: { color: colorOf(c.uid) } }, userOf(c.uid).name + ':'), h('span', { class: 'comment-text' }, rich(c.text)), h('span', { class: 'when' }, ago(c.ts)))),
             h('form', {
               class: 'reply',
               onsubmit: async e => {
@@ -461,7 +466,7 @@
                 if (!t) return;
                 try { await api(`/api/posts/${p.id}/comments`, { text: t }); cin.value = ''; } catch (x) { toast(errMsg(x)); }
               }
-            }, cin, h('button', { class: 'btn', type: 'submit' }, 'Responder')))));
+            }, cin, emojiBtn(cin), h('button', { class: 'btn', type: 'submit' }, 'Responder')))));
     });
   }
 
@@ -540,21 +545,39 @@
     }))];
   }
 
-  // ---------- chat ----------
-  function parts(text) {
+  // ---------- rich text: custom emojis (:name:) and @mentions ----------
+  const escRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  function buildMentionRe() {
+    const names = [...new Set(Object.values(S.users).map(u => u.name))].sort((a, b) => b.length - a.length);
+    S.byName = {};
+    Object.values(S.users).forEach(u => { S.byName[u.name.toLowerCase()] = u.id; });
+    S.mentionRe = names.length ? new RegExp(`((?<![\\p{L}\\p{N}_])@(?:${names.map(escRe).join('|')})(?![\\p{L}\\p{N}_]))`, 'iu') : null;
+  }
+  function mentionParts(text) {
+    if (!S.mentionRe || !text.includes('@')) return [text];
+    return text.split(S.mentionRe).filter(Boolean).map(t => {
+      const id = t.startsWith('@') ? S.byName[t.slice(1).toLowerCase()] : null;
+      if (id == null) return t;
+      return h('span', { class: 'mention' + (id === S.me.id ? ' me' : ''), style: { color: id === S.me.id ? null : colorOf(id) } }, t);
+    });
+  }
+  function rich(text) {
     if (!text) return [];
     const map = {};
     S.emojis.forEach(e => { map[e.name] = e.file; });
-    return text.split(/(:[a-z0-9_]{2,24}:)/).filter(Boolean).map(t => {
+    return text.split(/(:[a-z0-9_]{2,24}:)/).filter(Boolean).flatMap(t => {
       const k = t.slice(1, -1);
-      return /^:[a-z0-9_]{2,24}:$/.test(t) && up(map[k]) ? h('img', { class: 'ce', src: up(map[k]), alt: t, title: t }) : t;
+      return /^:[a-z0-9_]{2,24}:$/.test(t) && up(map[k]) ? [h('img', { class: 'ce', src: up(map[k]), alt: t, title: t })] : mentionParts(t);
     });
   }
+  const mentionsMe = text => !!text && mentionParts(text).some(n => n instanceof Node && n.classList.contains('me'));
+
+  // ---------- chat ----------
   function msgEl(m) {
-    if (m.sys) return h('div', { class: 'msg sys' }, `[${clock(m.ts)}] *** ${m.text}`);
-    const body = h('span', { class: 'msg-text' }, parts(m.text));
+    if (m.sys) return h('div', { class: 'msg sys', 'data-chat': m.id }, `[${clock(m.ts)}] *** ${m.text}`);
+    const body = h('span', { class: 'msg-text' }, rich(m.text));
     if (up(m.gif)) body.append(h('img', { class: 'msg-gif', src: up(m.gif), alt: 'GIF', loading: 'lazy' }));
-    return h('div', { class: 'msg' }, h('span', { class: 'time' }, `[${clock(m.ts)}]`), avatar(m.uid, 22), h('b', { class: 'nick', style: { color: colorOf(m.uid) } }, userOf(m.uid).name + ':'), body);
+    return h('div', { class: 'msg' + (m.uid !== S.me.id && mentionsMe(m.text) ? ' tagged' : ''), 'data-chat': m.id }, h('span', { class: 'time' }, `[${clock(m.ts)}]`), avatar(m.uid, 22), h('b', { class: 'nick', style: { color: colorOf(m.uid) } }, userOf(m.uid).name + ':'), body);
   }
   const nearBottom = () => R.log.scrollHeight - R.log.scrollTop - R.log.clientHeight < 80;
   function stick() { R.log.scrollTop = R.log.scrollHeight; setTimeout(() => { R.log.scrollTop = R.log.scrollHeight; }, 400); }
@@ -587,7 +610,160 @@
     const names = Object.keys(S.typing).filter(id => t - S.typing[id] < 3000 && Number(id) !== S.me.id).map(id => userOf(Number(id)).name);
     R.typing.textContent = names.length ? `${names.join(', ')} ${names.length > 1 ? 'están' : 'está'} escribiendo...` : '';
   }
-  function insert(s) { R.chatInput.value += s; R.chatInput.focus(); }
+  function insertAt(el, s) {
+    const a = el.selectionStart ?? el.value.length, b = el.selectionEnd ?? a;
+    el.value = el.value.slice(0, a) + s + el.value.slice(b);
+    el.focus();
+    el.setSelectionRange(a + s.length, a + s.length);
+  }
+  const insert = s => insertAt(R.chatInput, s);
+  // comment boxes get rebuilt when data changes; find the current copy of the same box
+  const live = el => (el.isConnected ? el : (el.dataset.k && R.secList && R.secList.querySelector(`[data-k="${el.dataset.k}"]`)) || null);
+
+  // ---------- @mention autocomplete ----------
+  function floating(cls) {
+    const el = h('div', { class: 'pop box hidden ' + cls });
+    document.body.append(el);
+    return el;
+  }
+  function place(pop, anchor) {
+    const r = anchor.getBoundingClientRect();
+    pop.style.left = Math.max(4, Math.min(r.left, window.innerWidth - pop.offsetWidth - 4)) + 'px';
+    if (r.bottom + pop.offsetHeight + 8 > window.innerHeight && r.top > pop.offsetHeight + 8) { pop.style.top = ''; pop.style.bottom = (window.innerHeight - r.top + 2) + 'px'; }
+    else { pop.style.bottom = ''; pop.style.top = (r.bottom + 2) + 'px'; }
+  }
+  const M = { el: null, target: null, list: [], idx: 0, start: 0 };
+  function closeMentions() { if (M.el) M.el.classList.add('hidden'); M.target = null; }
+  function checkMentions(el) {
+    const caret = el.selectionStart;
+    const m = caret == null ? null : /(?:^|[^\p{L}\p{N}_])@([^\s@]{0,24})$/u.exec(el.value.slice(0, caret));
+    if (!m) return closeMentions();
+    const qy = m[1].toLowerCase();
+    const users = Object.values(S.users).filter(u => u.id !== S.me.id);
+    const list = users.filter(u => u.name.toLowerCase().startsWith(qy))
+      .concat(users.filter(u => !u.name.toLowerCase().startsWith(qy) && u.name.toLowerCase().includes(qy))).slice(0, 6);
+    if (!list.length) return closeMentions();
+    M.el = M.el || floating('mention-pop');
+    Object.assign(M, { target: el, list, idx: 0, start: caret - m[1].length - 1 });
+    drawMentions();
+  }
+  function drawMentions() {
+    M.el.replaceChildren(...M.list.map((u, i) => h('button', {
+      type: 'button', class: 'row' + (i === M.idx ? ' on' : ''),
+      onmousedown: e => { e.preventDefault(); pickMention(u); }
+    }, avatar(u.id, 18), h('b', { style: { color: colorOf(u.id) } }, u.name))));
+    M.el.classList.remove('hidden');
+    place(M.el, M.target);
+  }
+  function pickMention(u) {
+    const el = M.target;
+    closeMentions();
+    if (!el) return;
+    el.setSelectionRange(M.start, el.selectionStart); // select the typed "@query" so it gets replaced
+    insertAt(el, '@' + u.name + ' ');
+  }
+  function withMentions(el) {
+    const check = () => checkMentions(el);
+    el.addEventListener('input', check);
+    el.addEventListener('click', check);
+    el.addEventListener('blur', () => setTimeout(() => { if (M.target === el) closeMentions(); }, 100));
+    el.addEventListener('keydown', e => {
+      if (M.target !== el || M.el.classList.contains('hidden')) return;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        M.idx = (M.idx + (e.key === 'ArrowDown' ? 1 : M.list.length - 1)) % M.list.length;
+        drawMentions();
+      } else if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        pickMention(M.list[M.idx]);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        closeMentions();
+      }
+    });
+    return el;
+  }
+
+  // ---------- emoji popover for posts and comments ----------
+  const E = { el: null, target: null, kind: 'emoji' };
+  function closeEmojis() { if (E.el) E.el.classList.add('hidden'); E.target = null; }
+  function emojiBtn(target) {
+    const btn = h('button', {
+      type: 'button', class: 'btn', title: 'Emojis',
+      onclick: () => {
+        if (E.target === target && !E.el.classList.contains('hidden')) return closeEmojis();
+        E.el = E.el || floating('emoji-pop');
+        E.target = target; E.anchor = btn;
+        drawEmojis();
+      }
+    }, '☺');
+    return btn;
+  }
+  function drawEmojis() {
+    const add = s => { const el = live(E.target); if (el) { E.target = el; insertAt(el, s); } };
+    const tabs = [['emoji', 'Emojis'], ['custom', 'Mis emojis']].map(([id, l]) =>
+      h('button', { type: 'button', class: 'tab' + (E.kind === id ? ' on' : ''), onclick: () => { E.kind = id; drawEmojis(); } }, l));
+    const custom = S.emojis.filter(x => up(x.file));
+    const body = E.kind === 'emoji'
+      ? h('div', { class: 'emoji-grid' }, EMOJIS.map(ch => h('button', { type: 'button', onclick: () => add(ch) }, ch)))
+      : custom.length
+        ? h('div', { class: 'ce-grid' }, custom.map(x => h('button', { type: 'button', title: `:${x.name}:`, onclick: () => add(`:${x.name}: `) }, h('img', { src: up(x.file), alt: '' }), h('span', null, `:${x.name}:`))))
+        : h('div', { class: 'small muted' }, 'Todavía no hay emojis propios. Creálos desde el chat: ☺ → Mis emojis.');
+    E.el.replaceChildren(
+      h('div', { class: 'picker-tabs' }, tabs, h('span', { class: 'spacer' }), h('button', { type: 'button', class: 'linkbtn', onclick: closeEmojis }, '[cerrar]')),
+      h('div', { class: 'picker-body' }, body));
+    E.el.classList.remove('hidden');
+    place(E.el, E.anchor.isConnected ? E.anchor : live(E.target) || E.anchor);
+  }
+  document.addEventListener('mousedown', e => {
+    if (E.el && !E.el.classList.contains('hidden') && !E.el.contains(e.target) && !(E.anchor && E.anchor.contains(e.target))) closeEmojis();
+  });
+  window.addEventListener('resize', () => { closeEmojis(); closeMentions(); });
+
+  // ---------- notifications ----------
+  const NOTIF_TEXT = {
+    chat: 'te etiquetó en el chat',
+    post: 'te etiquetó en un post',
+    comment_mention: 'te etiquetó en un comentario',
+    comment: 'comentó tu post'
+  };
+  const unread = () => S.notifs.filter(n => !n.seen).length;
+  function updateBadge() {
+    let n = unread();
+    if (S.tab === 'notifs' && n) {
+      // looking at the list counts as reading it; keep the new ones highlighted while here
+      R.fresh = new Set([...(R.fresh || []), ...S.notifs.filter(x => !x.seen).map(x => x.id)]);
+      S.notifs.forEach(x => { x.seen = true; });
+      api('/api/notifs/seen', {}).catch(() => {});
+      n = 0;
+    }
+    R.badge.textContent = n > 99 ? '99+' : String(n);
+    R.badge.classList.toggle('hidden', !n);
+    document.title = n ? `(${n}) Upipination` : 'Upipination';
+  }
+  function notifsList() {
+    if (!S.notifs.length) return [h('div', { class: 'empty' }, h('b', null, 'No tenés notificaciones.'), ' Cuando alguien te etiquete con @ o comente tus posts, aparece acá.')];
+    return [h('div', { class: 'notifs' }, S.notifs.map(n => h('button', {
+      type: 'button', class: 'notif' + (R.fresh && R.fresh.has(n.id) ? ' new' : ''), onclick: () => openNotif(n)
+    },
+    avatar(n.actor, 32),
+    h('div', { class: 'notif-main' },
+      h('div', null, h('b', { style: { color: colorOf(n.actor) } }, userOf(n.actor).name), ' ', NOTIF_TEXT[n.kind] || 'te mencionó', h('span', { class: 'when' }, ' · ' + ago(n.ts))),
+      n.text ? h('div', { class: 'notif-text' }, rich(n.text)) : null))))];
+  }
+  function flash(el) {
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+  }
+  function openNotif(n) {
+    if (n.chat) {
+      const el = R.log.querySelector(`[data-chat="${n.chat}"]`);
+      return el ? flash(el) : toast('Ese mensaje ya es muy viejo para mostrarlo en el chat.');
+    }
+    setTab('posts');
+    const el = R.secList.querySelector(`[data-post="${n.post}"]`);
+    return el ? flash(el) : toast('Ese post ya no está.');
+  }
 
   function togglePicker(kind) {
     const open = S.picker === kind || (kind === 'emoji' && S.picker === 'custom');
@@ -634,7 +810,7 @@
           } catch (x) { toast(errMsg(x)); }
         }
       }, h('label', { class: 'btn' }, R.pendingEmoji ? h('img', { class: 'preview-img', src: R.pendingEmoji.url, alt: '' }) : null, 'Imagen o GIF', fileIn), nameIn, h('button', { class: 'btn', type: 'submit' }, 'Crear emoji'));
-      body = [form, h('div', { class: 'small muted' }, 'Usalos en el chat escribiendo :nombre: o tocándolos acá.'),
+      body = [form, h('div', { class: 'small muted' }, 'Usalos en el chat y en los posts escribiendo :nombre: o tocándolos acá.'),
         S.emojis.length ? h('div', { class: 'ce-grid' }, S.emojis.filter(x => up(x.file)).map(x => h('button', { type: 'button', title: `:${x.name}:`, onclick: () => insert(`:${x.name}: `) }, h('img', { src: up(x.file), alt: '' }), h('span', null, `:${x.name}:`)))) : null];
     } else {
       const fileIn = h('input', {
@@ -676,6 +852,7 @@
     sock.on('presence', ids => { S.online = ids; updateOnline(); });
     sock.on('typing', uid => { S.typing[uid] = Date.now(); renderTyping(); setTimeout(renderTyping, 3100); });
     sock.on('changed', reload);
+    sock.on('notif', reload);
     sock.on('logout', () => boot());
     sock.on('connect_error', err => { if (err && err.message === 'auth') boot(); });
   }
@@ -684,6 +861,6 @@
     boot();
   }
 
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && R.lightbox) R.lightbox.classList.add('hidden'); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { if (R.lightbox) R.lightbox.classList.add('hidden'); closeEmojis(); } });
   boot();
 })();
