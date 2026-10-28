@@ -485,8 +485,9 @@ app.get('/uploads/:file', requireUser, (req, res) => {
 
 // header photos: members only
 app.use('/img', requireUser, express.static(path.join(ROOT, 'assets'), { maxAge: '7d', index: false, dotfiles: 'deny' }));
-// the page itself (no private data inside)
-app.use(express.static(path.join(ROOT, 'public'), { maxAge: '1h', dotfiles: 'deny' }));
+// the page itself (no private data inside). "no-cache" makes browsers and Cloudflare check for
+// a newer version on every load (a quick 304 when unchanged), so deploys show up right away.
+app.use(express.static(path.join(ROOT, 'public'), { dotfiles: 'deny', setHeaders: res => res.set('Cache-Control', 'no-cache') }));
 
 app.use((req, res) => res.status(404).json({ error: 'not_found' }));
 app.use((err, req, res, next) => {
