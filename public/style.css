@@ -189,3 +189,19 @@ textarea.input { min-height: 70px; resize: vertical; }
   .collage-row img { height: 120px !important; }
   .chat { height: 520px; }
 }
+
+/* Living: big video with the chat beside it, like a stream */
+.live { display: none; flex: 999 1 640px; min-width: 0; flex-direction: column; }
+.live .bar .small { font-weight: normal; }
+.live-stage { position: relative; aspect-ratio: 16 / 9; background: #000; }
+.live-stage iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.live-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 20px; text-align: center; font-size: 13px; color: #ddd; }
+.live-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px; }
+.live-bar .input { flex: 1 1 220px; width: auto; }
+.wrap.living { max-width: 1500px; }
+.wrap.living .live { display: flex; }
+.wrap.living .side, .wrap.living > .section { display: none; }
+.wrap.living .cols { align-items: stretch; }
+/* the chat takes the video's height instead of growing with its messages */
+.wrap.living .chat { flex: 1 1 320px; max-width: 420px; height: auto; min-height: 420px; contain: size; }
+@media (max-width: 1000px) { .wrap.living .chat { max-width: none; height: 520px; contain: none; } }
