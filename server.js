@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS emojis (name TEXT PRIMARY KEY, file TEXT NOT NULL, us
 CREATE TABLE IF NOT EXISTS gifs (id INTEGER PRIMARY KEY, file TEXT NOT NULL, user_id INTEGER NOT NULL, ts INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS notifs (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, actor_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, kind TEXT NOT NULL, post_id INTEGER REFERENCES posts(id) ON DELETE CASCADE, comment_id INTEGER REFERENCES comments(id) ON DELETE CASCADE, chat_id INTEGER REFERENCES chat(id) ON DELETE CASCADE, ts INTEGER NOT NULL, seen INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS notifs_user ON notifs(user_id, id);
+CREATE TABLE IF NOT EXISTS living (id INTEGER PRIMARY KEY CHECK (id = 1), vid TEXT NOT NULL, playing INTEGER NOT NULL, pos REAL NOT NULL, at INTEGER NOT NULL, by INTEGER);
 CREATE TABLE IF NOT EXISTS yeahs (post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, ts INTEGER NOT NULL, PRIMARY KEY (post_id, user_id));
 `);
 
@@ -100,7 +101,10 @@ const q = {
     FROM notifs n LEFT JOIN comments c ON c.id = n.comment_id LEFT JOIN chat ch ON ch.id = n.chat_id LEFT JOIN posts p ON p.id = n.post_id
     WHERE n.user_id = ? ORDER BY n.id DESC LIMIT 100`),
   seenNotifs: db.prepare('UPDATE notifs SET seen = 1 WHERE user_id = ? AND seen = 0'),
-  purgeNotifs: db.prepare('DELETE FROM notifs WHERE ts < ?')
+  purgeNotifs: db.prepare('DELETE FROM notifs WHERE ts < ?'),
+  liveGet: db.prepare('SELECT vid, playing, pos, at, by FROM living WHERE id = 1'),
+  livePut: db.prepare('INSERT OR REPLACE INTO living (id, vid, playing, pos, at, by) VALUES (1, ?, ?, ?, ?, ?)'),
+  liveDel: db.prepare('DELETE FROM living')
 };
 
 // ---------- helpers ----------
@@ -243,12 +247,14 @@ app.use(helmet({
     useDefaults: false,
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'"],
+      scriptSrc: ["'self'", 'https://www.youtube.com'],
       styleSrc: ["'self'"],
-      imgSrc: ["'self'", 'data:', 'blob:'],
+      imgSrc: ["'self'", 'data:', 'blob:', 'https://i.ytimg.com'],
       mediaSrc: ["'self'", 'blob:'],
       connectSrc: ["'self'", ...(ORIGIN ? [ORIGIN.replace(/^http/, 'ws')] : [])],
       fontSrc: ["'self'"],
+      // YouTube's player script and embed, only used by the Living page
+      frameSrc: ['https://www.youtube-nocookie.com'],
       objectSrc: ["'none'"],
       baseUri: ["'none'"],
       formAction: ["'self'"],
@@ -372,7 +378,8 @@ app.get('/api/state', requireUser, (req, res) => {
     art: q.art.all(),
     emojis: q.emojis.all(),
     notifs: q.notifs.all(req.user.id).map(n => ({ ...n, seen: !!n.seen })),
-    stats: { messages: q.myMessages.get(req.user.id).n }
+    stats: { messages: q.myMessages.get(req.user.id).n },
+    live: liveState()
   });
 });
 
@@ -536,6 +543,32 @@ function emitChat(id) {
   const row = q.chatById.get(id);
   if (row) io.emit('chat', { ...row, sys: !!row.sys });
 }
+// ---------- Living: one shared YouTube video everyone watches in sync ----------
+// The server keeps where the video was (pos, in seconds) at time `at`, and whether it's playing.
+// Clients work out the current spot from that, so people who join late land at the same moment.
+function youtubeId(input) {
+  const s = typeof input === 'string' ? input.trim() : '';
+  if (/^[\w-]{11}$/.test(s)) return { vid: s, start: 0 };
+  let u;
+  try { u = new URL(/^https?:\/\//i.test(s) ? s : 'https://' + s); } catch (e) { return null; }
+  const host = u.hostname.replace(/^(www|m|music)\./, '');
+  let vid = null;
+  if (host === 'youtu.be') vid = u.pathname.slice(1, 12);
+  else if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
+    vid = u.searchParams.get('v') || (u.pathname.match(/^\/(?:shorts|live|embed)\/([\w-]{11})/) || [])[1];
+  }
+  if (!vid || !/^[\w-]{11}$/.test(vid)) return null;
+  const t = String(u.searchParams.get('t') || u.searchParams.get('start') || '');
+  const m = t.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s?)?$/);
+  const start = m ? (+m[1] || 0) * 3600 + (+m[2] || 0) * 60 + (+m[3] || 0) : 0;
+  return { vid, start: Math.min(start, 24 * 3600) };
+}
+function liveState() {
+  const r = q.liveGet.get();
+  return r ? { vid: r.vid, playing: !!r.playing, pos: r.pos, at: r.at, by: r.by, now: now() } : { vid: null, now: now() };
+}
+const emitLive = () => io.emit('live', liveState());
+
 function sys(text) { emitChat(Number(q.addChat.run(null, text, null, 1, now()).lastInsertRowid)); }
 function notify(ids, actorId, kind, ref, ts) {
   for (const id of ids) {
@@ -567,6 +600,36 @@ io.on('connection', socket => {
     emitChat(chatId);
     notify(mentionedIds(text, uid), uid, 'chat', { chat: chatId }, t);
     reply({ ok: true });
+  });
+
+  // Living controls: anyone can put a video, play, pause, skip or remove it
+  let liveStart = now(), liveCount = 0;
+  const liveOk = () => {
+    const t = now();
+    if (t - liveStart > 10e3) { liveStart = t; liveCount = 0; }
+    return ++liveCount <= 15 && !!q.sessionAlive.get(socket.data.sid, t);
+  };
+  socket.on('live:set', url => {
+    if (!liveOk()) return;
+    const yt = youtubeId(url);
+    if (!yt) return socket.emit('live:bad');
+    q.livePut.run(yt.vid, 1, yt.start, now(), uid);
+    emitLive();
+    sys(`${q.userById.get(uid)?.name || 'Alguien'} puso un video en Living`);
+  });
+  socket.on('live:ctl', c => {
+    if (!liveOk() || !c || typeof c !== 'object') return;
+    const cur = q.liveGet.get();
+    const pos = Number(c.pos);
+    if (!cur || c.vid !== cur.vid || !Number.isFinite(pos) || pos < 0 || pos > 48 * 3600) return;
+    q.livePut.run(cur.vid, c.playing ? 1 : 0, pos, now(), cur.by);
+    emitLive();
+  });
+  socket.on('live:stop', () => {
+    if (!liveOk() || !q.liveGet.get()) return;
+    q.liveDel.run();
+    emitLive();
+    sys(`${q.userById.get(uid)?.name || 'Alguien'} sacó el video de Living`);
   });
 
   socket.on('typing', () => {

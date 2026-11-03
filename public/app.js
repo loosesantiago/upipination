@@ -3,7 +3,7 @@
   const TZ = 'America/Argentina/Buenos_Aires', LOC = 'es-AR', DAY = 864e5;
   const FILE_RE = /^[a-f0-9]{32}\.(jpg|png|gif|webp|mp4|webm|mov)$/;
   const app = document.getElementById('app');
-  const S = { me: null, users: {}, chat: [], posts: [], events: [], art: [], emojis: [], notifs: [], online: [], stats: { messages: 0 }, tab: 'posts', picker: null, typing: {}, dark: false };
+  const S = { me: null, users: {}, chat: [], posts: [], events: [], art: [], emojis: [], notifs: [], online: [], stats: { messages: 0 }, live: { vid: null }, tab: 'posts', picker: null, typing: {}, dark: false };
   const R = {};
   let sock = null;
   try { S.dark = localStorage.getItem('upi_theme') === 'dark'; } catch (e) {}
@@ -167,6 +167,7 @@
     const st = await api('/api/state');
     S.me = st.me; S.users = {};
     st.users.forEach(u => { S.users[u.id] = u; });
+    S.live = st.live; liveClock(st.live);
     Object.assign(S, { chat: st.chat, posts: st.posts, events: st.events, art: st.art, emojis: st.emojis, notifs: st.notifs, stats: st.stats, online: st.online });
     buildMentionRe();
   }
@@ -198,7 +199,7 @@
         h('span', null, 'Hola de nuevo, ', R.greet, ' · ', h('a', { href: '#', onclick: e => { e.preventDefault(); logout(); } }, 'Cerrar sesión')),
         h('div', { class: 'inline-form' }, R.clock, themeBtn())));
 
-    const TABS = [['posts', 'POSTS'], ['event', 'PRÓXIMO EVENTO'], ['art', 'ARTE'], ['notifs', 'NOTIFICACIONES']];
+    const TABS = [['posts', 'POSTS'], ['event', 'PRÓXIMO EVENTO'], ['art', 'ARTE'], ['living', 'LIVING'], ['notifs', 'NOTIFICACIONES']];
     R.tabBtns = {};
     R.badge = h('span', { class: 'badge hidden' });
     const nav = h('nav', { class: 'nav' }, TABS.map(([id, label]) => (R.tabBtns[id] = h('button', { type: 'button', onclick: () => goTab(id) }, label, id === 'notifs' ? R.badge : null))));
@@ -230,11 +231,21 @@
     R.recentArt = h('div', { class: 'side-pad' });
     const right = h('aside', { class: 'side right' }, box('Próximo evento', R.nextBox), box('Últimos posts', R.recentPosts), box('Arte nuevo', R.recentArt));
 
+    R.liveStage = h('div', { class: 'live-stage' });
+    R.liveInfo = h('span', { class: 'small' });
+    R.liveUrl = h('input', { class: 'input', type: 'url', maxLength: 300, placeholder: 'Pegá un link de YouTube' });
+    R.liveStop = h('button', { type: 'button', class: 'btn', onclick: () => { if (confirm('¿Sacar el video para todos?')) sock.emit('live:stop'); } }, 'Sacar video');
+    const liveForm = h('form', {
+      class: 'live-bar',
+      onsubmit: e => { e.preventDefault(); const v = R.liveUrl.value.trim(); if (!v) return; sock.emit('live:set', v); R.liveUrl.value = ''; }
+    }, R.liveUrl, h('button', { type: 'submit', class: 'btn' }, 'Poner'), R.liveStop);
+    R.liveBox = h('section', { class: 'box live' }, h('div', { class: 'bar' }, h('span', null, 'Living'), R.liveInfo), R.liveStage, liveForm);
+
     R.secTitle = h('div', { class: 'bar' });
     R.secBody = h('div', { class: 'section-body' });
     R.lightbox = h('div', { class: 'lightbox hidden', onclick: () => R.lightbox.classList.add('hidden') });
 
-    app.replaceChildren(h('div', { class: 'wrap' }, header, nav, ticker, h('div', { class: 'cols' }, left, chat, right), (R.section = h('section', { class: 'box section' }, R.secTitle, R.secBody))), R.lightbox);
+    app.replaceChildren(R.wrap = h('div', { class: 'wrap' }, header, nav, ticker, h('div', { class: 'cols' }, left, R.liveBox, chat, right), (R.section = h('section', { class: 'box section' }, R.secTitle, R.secBody))), R.lightbox);
     R.builtTab = null; R.chatRendered = false; R.editingNick = false;
     refreshAll();
     renderChat();
@@ -386,11 +397,18 @@
   function goTab(id) {
     setTab(id);
     const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
-    R.section.scrollIntoView({ block: 'start', behavior: still ? 'auto' : 'smooth' });
+    (id === 'living' ? R.liveBox : R.section).scrollIntoView({ block: 'start', behavior: still ? 'auto' : 'smooth' });
   }
   function setTab(id) { S.tab = id; if (id !== 'notifs') R.fresh = null; updateBadge(); updateSection(); }
   function updateSection() {
     for (const id in R.tabBtns) R.tabBtns[id].classList.toggle('on', S.tab === id);
+    const living = S.tab === 'living';
+    if (living !== R.wrap.classList.contains('living')) {
+      R.wrap.classList.toggle('living', living);
+      if (nearBottom()) stick(); // the chat changes size; stay on the latest message
+    }
+    if (living) return showLive();
+    hideLive();
     if (R.builtTab !== S.tab) {
       R.builtTab = S.tab;
       R.secTitle.textContent = TITLES[S.tab];
@@ -847,6 +865,99 @@
       h('div', { class: 'picker-body' }, body));
   }
 
+  // ---------- Living: watch a YouTube video together, in sync ----------
+  // The server says where the video was (pos) at server time `at` and whether it's playing.
+  // Each player follows that; when someone plays, pauses or skips, it goes to everyone.
+  const L = { vid: null, iframe: null, player: null, ready: false, joined: false, quiet: 0, prev: null, timer: null, api: null, offset: 0 };
+  const VID_RE = /^[\w-]{11}$/;
+  function liveClock(st) { if (st && st.now) L.offset = Date.now() - st.now; }
+  const serverNow = () => Date.now() - L.offset;
+  function liveTarget() {
+    const s = S.live;
+    return s.playing ? s.pos + (serverNow() - s.at) / 1000 : s.pos;
+  }
+  const hush = () => { L.quiet = Date.now() + 1500; L.prev = null; }; // ignore the player's events caused by us
+  function loadYT() {
+    if (window.YT && window.YT.Player) return Promise.resolve();
+    if (!L.api) L.api = new Promise((resolve, reject) => {
+      window.onYouTubeIframeAPIReady = resolve;
+      const s = h('script', { src: 'https://www.youtube.com/iframe_api' });
+      s.onerror = () => { L.api = null; s.remove(); reject(new Error('yt')); };
+      document.head.append(s);
+    });
+    return L.api;
+  }
+  function showLive() {
+    const s = S.live;
+    const who = s.vid && s.by ? userOf(s.by) : null;
+    R.liveInfo.replaceChildren(...(who ? ['puesto por ', h('b', { style: { color: colorOf(who.id) } }, who.name)] : []));
+    R.liveStop.hidden = !s.vid;
+    if (!s.vid || !VID_RE.test(s.vid)) {
+      hideLive();
+      R.liveStage.replaceChildren(h('div', { class: 'live-empty' }, h('b', null, 'No hay nada puesto.'), h('span', null, 'Pegá un link de YouTube abajo y lo miramos todos juntos.')));
+      return;
+    }
+    if (L.vid === s.vid) return liveSync();
+    hideLive();
+    L.vid = s.vid;
+    const iframe = L.iframe = h('iframe', {
+      referrerpolicy: 'strict-origin-when-cross-origin', // YouTube refuses to play embeds without it
+      title: 'Video de Living',
+      allow: 'autoplay; encrypted-media; picture-in-picture; fullscreen',
+      allowfullscreen: true,
+      src: `https://www.youtube-nocookie.com/embed/${s.vid}?enablejsapi=1&playsinline=1&rel=0&autoplay=${s.playing ? 1 : 0}&start=${Math.floor(liveTarget())}&origin=${encodeURIComponent(location.origin)}`
+    });
+    R.liveStage.replaceChildren(iframe);
+    loadYT().then(() => {
+      if (L.iframe !== iframe) return;
+      L.player = new window.YT.Player(iframe, { events: { onReady: () => { L.ready = true; liveSync(); }, onStateChange: e => liveEvent(e.data) } });
+      L.timer = setInterval(liveTick, 1000);
+    }).catch(() => toast('No se pudo cargar YouTube. Probá recargar la página.'));
+  }
+  function hideLive() {
+    clearInterval(L.timer);
+    if (L.iframe) R.liveStage.replaceChildren();
+    Object.assign(L, { vid: null, iframe: null, player: null, ready: false, joined: false, prev: null, timer: null });
+  }
+  // move my player to where the group is
+  function liveSync() {
+    const p = L.player;
+    if (!L.ready || !p || S.live.vid !== L.vid) return;
+    const want = liveTarget(), cur = p.getCurrentTime(), st = p.getPlayerState();
+    if (S.live.playing) {
+      if (Math.abs(cur - want) > 2.5) { hush(); p.seekTo(want, true); }
+      if (st !== 1 && st !== 3) { hush(); p.playVideo(); }
+    } else {
+      if (st === 1 || st === 3) { hush(); p.pauseVideo(); }
+      if (Math.abs(cur - want) > 1) { hush(); p.seekTo(want, true); }
+    }
+  }
+  function liveSend(playing) {
+    const pos = Math.max(0, L.player.getCurrentTime());
+    S.live = { ...S.live, playing, pos, at: serverNow() };
+    sock.emit('live:ctl', { vid: L.vid, playing, pos });
+  }
+  // the player changed state: if it wasn't us, it was this person pressing play or pause
+  function liveEvent(st) {
+    if (!L.ready || S.live.vid !== L.vid) return;
+    if (st === 1 && !L.joined) { L.joined = true; if (S.live.playing) return liveSync(); } // just arrived: catch up
+    if (Date.now() < L.quiet) return;
+    if (st === 1 && !S.live.playing) liveSend(true);
+    else if (st === 2 && S.live.playing && L.joined) liveSend(false); // not before it ever played (blocked autoplay)
+  }
+  // every second: notice skips (the time jumps) and fix drift (slow internet, ads)
+  function liveTick() {
+    const p = L.player;
+    if (!L.ready || !p || S.live.vid !== L.vid) return;
+    const t = Date.now(), st = p.getPlayerState(), cur = p.getCurrentTime();
+    const prev = L.prev;
+    L.prev = { t, st, cur };
+    if (t < L.quiet || !prev || prev.st !== st) return;
+    const rate = st === 1 ? p.getPlaybackRate() || 1 : 0;
+    if ((st === 1 || st === 2) && Math.abs(cur - (prev.cur + rate * (t - prev.t) / 1000)) > 2) return liveSend(st === 1); // skipped
+    if (st === 1 && S.live.playing && Math.abs(cur - liveTarget()) > 3) liveSync(); // fell behind or ahead
+  }
+
   // ---------- realtime ----------
   function connect() {
     if (sock) sock.disconnect();
@@ -864,6 +975,8 @@
     sock.on('presence', ids => { S.online = ids; updateOnline(); });
     sock.on('typing', uid => { S.typing[uid] = Date.now(); renderTyping(); setTimeout(renderTyping, 3100); });
     sock.on('changed', reload);
+    sock.on('live', st => { S.live = st; liveClock(st); if (S.tab === 'living') showLive(); });
+    sock.on('live:bad', () => toast('Ese link no parece de YouTube.'));
     sock.on('notif', reload);
     sock.on('logout', () => boot());
     sock.on('connect_error', err => { if (err && err.message === 'auth') boot(); });
