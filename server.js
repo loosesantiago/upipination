@@ -113,13 +113,15 @@ const pub = u => ({ id: u.id, name: u.name, avatar: u.avatar || null });
 const FILE_RE = /^[a-f0-9]{32}\.(jpg|png|gif|webp|mp4|webm|mov)$/;
 
 // @mentions use display names (which may contain spaces). Longest names are matched first,
-// so "@Ana María" tags Ana María and not also Ana.
+// so "@Ana María" tags Ana María and not also Ana. "@all" tags everyone.
 const WORD = /[\p{L}\p{N}_]/u;
+const ALL_RE = /(?<![\p{L}\p{N}_])@all(?![\p{L}\p{N}_])/iu;
 function mentionedIds(text, actorId) {
   if (!text || !text.includes('@')) return [];
+  const users = q.users.all().sort((a, b) => b.name.length - a.name.length);
+  if (ALL_RE.test(text)) return users.map(u => u.id).filter(id => id !== actorId);
   let low = text.toLowerCase();
   const ids = [];
-  const users = q.users.all().sort((a, b) => b.name.length - a.name.length);
   for (const u of users) {
     const tag = '@' + u.name.toLowerCase();
     for (let i = low.indexOf(tag); i !== -1; i = low.indexOf(tag, i + 1)) {

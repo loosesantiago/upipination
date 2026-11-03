@@ -586,11 +586,12 @@
     const names = [...new Set(Object.values(S.users).map(u => u.name))].sort((a, b) => b.length - a.length);
     S.byName = {};
     Object.values(S.users).forEach(u => { S.byName[u.name.toLowerCase()] = u.id; });
-    S.mentionRe = names.length ? new RegExp(`((?<![\\p{L}\\p{N}_])@(?:${names.map(escRe).join('|')})(?![\\p{L}\\p{N}_]))`, 'iu') : null;
+    S.mentionRe = new RegExp(`((?<![\\p{L}\\p{N}_])@(?:${['all', ...names.map(escRe)].join('|')})(?![\\p{L}\\p{N}_]))`, 'iu');
   }
   function mentionParts(text) {
     if (!S.mentionRe || !text.includes('@')) return [text];
     return text.split(S.mentionRe).filter(Boolean).map(t => {
+      if (/^@all$/i.test(t)) return h('span', { class: 'mention me' }, t);
       const id = t.startsWith('@') ? S.byName[t.slice(1).toLowerCase()] : null;
       if (id == null) return t;
       return h('span', { class: 'mention' + (id === S.me.id ? ' me' : ''), style: { color: id === S.me.id ? null : colorOf(id) } }, t);
@@ -668,6 +669,7 @@
     else { pop.style.bottom = ''; pop.style.top = (r.bottom + 2) + 'px'; }
   }
   const M = { el: null, target: null, list: [], idx: 0, start: 0 };
+  const ALL = { name: 'all' }; // "@all" entry in the autocomplete list
   function closeMentions() { if (M.el) M.el.classList.add('hidden'); M.target = null; }
   function checkMentions(el) {
     const caret = el.selectionStart;
@@ -677,6 +679,7 @@
     const users = Object.values(S.users).filter(u => u.id !== S.me.id);
     const list = users.filter(u => u.name.toLowerCase().startsWith(qy))
       .concat(users.filter(u => !u.name.toLowerCase().startsWith(qy) && u.name.toLowerCase().includes(qy))).slice(0, 6);
+    if ('all'.startsWith(qy)) list.unshift(ALL);
     if (!list.length) return closeMentions();
     M.el = M.el || floating('mention-pop');
     Object.assign(M, { target: el, list, idx: 0, start: caret - m[1].length - 1 });
@@ -686,7 +689,9 @@
     M.el.replaceChildren(...M.list.map((u, i) => h('button', {
       type: 'button', class: 'row' + (i === M.idx ? ' on' : ''),
       onmousedown: e => { e.preventDefault(); pickMention(u); }
-    }, avatar(u.id, 18), h('b', { style: { color: colorOf(u.id) } }, u.name))));
+    }, ...(u === ALL
+      ? [h('span', { class: 'av av-i', style: { width: '18px', height: '18px', fontSize: '10px' } }, '@'), h('b', null, 'all'), h('span', { class: 'tiny muted' }, ' avisar a todos')]
+      : [avatar(u.id, 18), h('b', { style: { color: colorOf(u.id) } }, u.name)]))));
     M.el.classList.remove('hidden');
     place(M.el, M.target);
   }
