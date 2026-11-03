@@ -201,7 +201,7 @@
     const TABS = [['posts', 'POSTS'], ['event', 'PRÓXIMO EVENTO'], ['art', 'ARTE'], ['notifs', 'NOTIFICACIONES']];
     R.tabBtns = {};
     R.badge = h('span', { class: 'badge hidden' });
-    const nav = h('nav', { class: 'nav' }, TABS.map(([id, label]) => (R.tabBtns[id] = h('button', { type: 'button', onclick: () => setTab(id) }, label, id === 'notifs' ? R.badge : null))));
+    const nav = h('nav', { class: 'nav' }, TABS.map(([id, label]) => (R.tabBtns[id] = h('button', { type: 'button', onclick: () => goTab(id) }, label, id === 'notifs' ? R.badge : null))));
     R.tickerText = h('span');
     const ticker = h('div', { class: 'ticker' }, R.tickerText);
 
@@ -234,7 +234,7 @@
     R.secBody = h('div', { class: 'section-body' });
     R.lightbox = h('div', { class: 'lightbox hidden', onclick: () => R.lightbox.classList.add('hidden') });
 
-    app.replaceChildren(h('div', { class: 'wrap' }, header, nav, ticker, h('div', { class: 'cols' }, left, chat, right), h('section', { class: 'box' }, R.secTitle, R.secBody)), R.lightbox);
+    app.replaceChildren(h('div', { class: 'wrap' }, header, nav, ticker, h('div', { class: 'cols' }, left, chat, right), (R.section = h('section', { class: 'box section' }, R.secTitle, R.secBody))), R.lightbox);
     R.builtTab = null; R.chatRendered = false; R.editingNick = false;
     refreshAll();
     renderChat();
@@ -358,7 +358,7 @@
   }
   function updateSide() {
     const nx = upcoming()[0];
-    const goEvent = h('button', { class: 'linkbtn', type: 'button', onclick: () => setTab('event') }, '» Ver eventos');
+    const goEvent = h('button', { class: 'linkbtn', type: 'button', onclick: () => goTab('event') }, '» Ver eventos');
     if (nx) {
       const f = fmt(nx);
       R.nextBox.replaceChildren(h('span', { class: 'kicker' }, f.countdown), h('b', { style: { fontSize: '13px' } }, f.title), h('span', { class: 'small muted' }, `${f.dateText} · ${f.timeText}`), h('span', { class: 'small' }, f.goingText), goEvent);
@@ -367,12 +367,12 @@
     }
     const recent = S.posts.slice(0, 3);
     R.recentPosts.replaceChildren(...(recent.length ? recent.map(p => h('div', { class: 'recent' },
-      h('button', { class: 'linkbtn', type: 'button', onclick: () => setTab('posts') }, p.text || 'Compartió fotos o videos'),
+      h('button', { class: 'linkbtn', type: 'button', onclick: () => goTab('posts') }, p.text || 'Compartió fotos o videos'),
       h('span', { class: 'tiny muted' }, `por ${userOf(p.uid).name} · ${ago(p.ts)}`))) : [h('div', { class: 'recent small muted' }, 'Todavía no hay posts.')]));
     const art = S.art.slice(0, 6);
     R.recentArt.replaceChildren(art.length
       ? h('div', { class: 'grid3' }, art.map(a => h('button', { class: 'thumb', type: 'button', onclick: () => openLightbox(up(a.file), `${userOf(a.uid).name} · ${ago(a.ts)}`) }, h('img', { src: up(a.file), alt: '', loading: 'lazy' }))))
-      : h('button', { class: 'linkbtn', type: 'button', onclick: () => setTab('art') }, '» Subí el primero'));
+      : h('button', { class: 'linkbtn', type: 'button', onclick: () => goTab('art') }, '» Subí el primero'));
   }
   function openLightbox(src, caption) {
     if (!src) return;
@@ -382,6 +382,12 @@
 
   // ---------- section (posts / event / art) ----------
   const TITLES = { posts: 'Posts', event: 'Próximo evento', art: 'Arte', notifs: 'Notificaciones' };
+  // Switch tab and move the view down to the section, so nobody has to scroll.
+  function goTab(id) {
+    setTab(id);
+    const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    R.section.scrollIntoView({ block: 'start', behavior: still ? 'auto' : 'smooth' });
+  }
   function setTab(id) { S.tab = id; if (id !== 'notifs') R.fresh = null; updateBadge(); updateSection(); }
   function updateSection() {
     for (const id in R.tabBtns) R.tabBtns[id].classList.toggle('on', S.tab === id);
