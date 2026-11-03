@@ -482,6 +482,23 @@ app.post('/api/art', requireUser, files('files', 10), (req, res) => {
   res.json({ ok: true });
 });
 
+// image in the chat (pasted or dropped), with optional text
+const chatImgTimes = new Map();
+app.post('/api/chat/image', requireUser, files('file', 1), (req, res) => {
+  const list = req.files || [];
+  const text = clean(req.body?.text ?? '', 1000);
+  const t = now();
+  const recent = (chatImgTimes.get(req.user.id) || []).filter(x => t - x < 60e3);
+  if (recent.length >= 10) { drop(list); return res.status(429).json({ error: 'rate' }); }
+  if (list.length !== 1 || text === null) { drop(list); return res.status(400).json({ error: 'file' }); }
+  const [file] = keep(list, IMG);
+  chatImgTimes.set(req.user.id, [...recent, t]);
+  const chatId = Number(q.addChat.run(req.user.id, text || null, file, 0, t).lastInsertRowid);
+  emitChat(chatId);
+  notify(mentionedIds(text, req.user.id), req.user.id, 'chat', { chat: chatId }, t);
+  res.json({ ok: true });
+});
+
 app.post('/api/emojis', requireUser, files('file', 1), (req, res) => {
   const list = req.files || [];
   const name = typeof req.body?.name === 'string' ? req.body.name.trim().toLowerCase() : '';

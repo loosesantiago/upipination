@@ -223,8 +223,22 @@
     R.meNick = h('b', { class: 'nick small' });
     const composer = h('form', { class: 'composer', onsubmit: sendChat }, R.meAv, R.meNick, R.chatInput,
       h('button', { type: 'button', class: 'btn', title: 'Emotes', onclick: togglePicker }, '☺'),
-      h('button', { type: 'submit', class: 'btn' }, 'Enviar'));
-    const chat = h('section', { class: 'box chat' }, h('div', { class: 'bar' }, h('span', null, 'Chat'), R.chatCount), R.log, R.typing, R.picker, composer);
+      R.chatSend = h('button', { type: 'submit', class: 'btn' }, 'Enviar'));
+    R.chatAttach = h('div', { class: 'attach hidden' });
+    R.chatInput.addEventListener('paste', e => {
+      const f = [...(e.clipboardData?.files || [])].find(x => x.type.startsWith('image/'));
+      if (f) { e.preventDefault(); attachImage(f); }
+    });
+    const chat = h('section', {
+      class: 'box chat',
+      ondragover: e => { if ([...e.dataTransfer.types].includes('Files')) { e.preventDefault(); chat.classList.add('drop'); } },
+      ondragleave: e => { if (!chat.contains(e.relatedTarget)) chat.classList.remove('drop'); },
+      ondrop: e => {
+        chat.classList.remove('drop');
+        const f = [...e.dataTransfer.files].find(x => x.type.startsWith('image/'));
+        if (f) { e.preventDefault(); attachImage(f); }
+      }
+    }, h('div', { class: 'bar' }, h('span', null, 'Chat'), R.chatCount), R.log, R.typing, R.picker, R.chatAttach, composer);
 
     R.nextBox = h('div', { class: 'side-pad' });
     R.recentPosts = h('div');
@@ -630,10 +644,10 @@
   function msgEl(m) {
     if (m.sys) return h('div', { class: 'msg sys', 'data-chat': m.id }, `[${clock(m.ts)}] *** ${m.text}`);
     const body = h('span', { class: 'msg-text' }, rich(m.text));
-    if (up(m.gif)) body.append(h('img', { class: 'msg-gif', src: up(m.gif), alt: 'GIF', loading: 'lazy' }));
+    if (up(m.gif)) body.append(h('img', { class: 'msg-gif', src: up(m.gif), alt: 'Imagen', loading: 'lazy', onclick: () => openLightbox(up(m.gif), `${userOf(m.uid).name} · ${clock(m.ts)}`), onload: () => { if (nearBottom(300)) stick(); } }));
     return h('div', { class: 'msg' + (m.uid !== S.me.id && mentionsMe(m.text) ? ' tagged' : ''), 'data-chat': m.id }, h('span', { class: 'time' }, `[${clock(m.ts)}]`), avatar(m.uid, 22), h('b', { class: 'nick', style: { color: colorOf(m.uid) } }, userOf(m.uid).name + ':'), body);
   }
-  const nearBottom = () => R.log.scrollHeight - R.log.scrollTop - R.log.clientHeight < 80;
+  const nearBottom = (gap = 80) => R.log.scrollHeight - R.log.scrollTop - R.log.clientHeight < gap;
   function stick() { R.log.scrollTop = R.log.scrollHeight; setTimeout(() => { R.log.scrollTop = R.log.scrollHeight; }, 400); }
   function renderChat() {
     const wasNear = !R.chatRendered || nearBottom();
@@ -647,9 +661,56 @@
     R.log.append(msgEl(m));
     if (wasNear || m.uid === S.me.id) stick();
   }
+  // pasted or dropped image waiting to be sent with the next message
+  function attachImage(f) {
+    if (!/^image\/(jpeg|png|gif|webp)$/.test(f.type)) return toast('Solo se pueden mandar fotos JPG, PNG, GIF o WEBP.');
+    clearAttach();
+    R.pending = f;
+    const url = URL.createObjectURL(f);
+    R.chatAttach.replaceChildren(h('img', { src: url, alt: '', onload: () => URL.revokeObjectURL(url) }),
+      h('span', { class: 'small muted' }, 'Imagen lista. Escribí algo si querés y tocá Enviar.'),
+      h('button', { type: 'button', class: 'linkbtn', onclick: clearAttach }, '[quitar]'));
+    R.chatAttach.classList.remove('hidden');
+    R.chatInput.focus();
+  }
+  function clearAttach() { R.pending = null; R.chatAttach.replaceChildren(); R.chatAttach.classList.add('hidden'); }
+  // big photos and screenshots get shrunk before uploading (GIFs stay as they are so they keep moving)
+  function fitImage(f, max) {
+    if (f.type === 'image/gif' || f.size < 1.5e6) return Promise.resolve(f);
+    return new Promise(resolve => {
+      const url = URL.createObjectURL(f);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+        const c = document.createElement('canvas');
+        c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        c.toBlob(b => resolve(b && b.size < f.size ? b : f), 'image/jpeg', 0.88);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(f); };
+      img.src = url;
+    });
+  }
+  async function sendImage(text) {
+    if (R.sending) return;
+    R.sending = true;
+    R.chatSend.disabled = true;
+    try {
+      const fd = new FormData();
+      fd.append('text', text);
+      fd.append('file', await fitImage(R.pending, 2000), 'imagen');
+      await api('/api/chat/image', fd, true);
+      clearAttach();
+      R.chatInput.value = '';
+    } catch (x) { toast(errMsg(x)); }
+    R.sending = false;
+    R.chatSend.disabled = false;
+  }
   function sendChat(e) {
     e.preventDefault();
     const text = R.chatInput.value.trim();
+    if (R.pending) return sendImage(text);
     if (!text || !sock) return;
     sock.emit('chat', { text }, ack => { if (ack && ack.error) toast(ack.error === 'rate' ? ERR.rate : 'No se pudo enviar el mensaje.'); });
     R.chatInput.value = '';
