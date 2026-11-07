@@ -384,7 +384,9 @@
     R.musicGif = h('img', { class: 'pirate', src: '/img/pirate-radio.gif', alt: 'Pirata bailando con una radio' });
     R.musicNow = h('div', { class: 'music-now small' });
     R.musicPlay = h('button', { type: 'button', class: 'btn', title: 'Reproducir / pausar', onclick: musicToggle }, '▶');
-    R.musicStage = h('div', { class: 'music-stage hidden' });
+    // the video stays loaded (that's what plays the sound) but is tucked away unless someone wants to see it
+    R.musicStage = h('div', { class: 'music-stage tucked' });
+    R.musicVid = h('button', { type: 'button', class: 'btn', title: 'Mostrar / ocultar el video', hidden: true, onclick: () => { R.musicStage.classList.toggle('tucked'); R.musicVid.classList.toggle('on'); } }, '📺');
     R.musicList = h('ol', { class: 'music-list' });
     R.musicCount = h('span', { class: 'small' });
     const url = h('input', { class: 'input', type: 'url', maxLength: 300, placeholder: 'Link de YouTube' });
@@ -406,7 +408,8 @@
         h('div', { class: 'music-ctl' },
           h('button', { type: 'button', class: 'btn', title: 'Anterior', onclick: () => musicStep(-1) }, '⏮'),
           R.musicPlay,
-          h('button', { type: 'button', class: 'btn', title: 'Siguiente', onclick: () => musicStep(1) }, '⏭'))),
+          h('button', { type: 'button', class: 'btn', title: 'Siguiente', onclick: () => musicStep(1) }, '⏭'),
+          R.musicVid)),
       R.musicStage, R.musicList, form);
   }
   function updateMusic() {
@@ -430,8 +433,8 @@
   }
   async function musicPlay(m) {
     MU.id = m.id;
+    R.musicVid.hidden = false;
     MU.at = S.music.indexOf(m);
-    R.musicStage.classList.remove('hidden');
     if (MU.player && MU.ready) {
       MU.player.loadVideoById(m.vid);
     } else if (!MU.player) {
