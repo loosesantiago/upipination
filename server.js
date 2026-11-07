@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS gifs (id INTEGER PRIMARY KEY, file TEXT NOT NULL, use
 CREATE TABLE IF NOT EXISTS notifs (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, actor_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, kind TEXT NOT NULL, post_id INTEGER REFERENCES posts(id) ON DELETE CASCADE, comment_id INTEGER REFERENCES comments(id) ON DELETE CASCADE, chat_id INTEGER REFERENCES chat(id) ON DELETE CASCADE, ts INTEGER NOT NULL, seen INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS notifs_user ON notifs(user_id, id);
 CREATE TABLE IF NOT EXISTS living (id INTEGER PRIMARY KEY CHECK (id = 1), vid TEXT NOT NULL, playing INTEGER NOT NULL, pos REAL NOT NULL, at INTEGER NOT NULL, by INTEGER);
+CREATE TABLE IF NOT EXISTS ticker (id INTEGER PRIMARY KEY CHECK (id = 1), lines TEXT NOT NULL, by INTEGER, ts INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS yeahs (post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, ts INTEGER NOT NULL, PRIMARY KEY (post_id, user_id));
 `);
 
@@ -104,7 +105,9 @@ const q = {
   purgeNotifs: db.prepare('DELETE FROM notifs WHERE ts < ?'),
   liveGet: db.prepare('SELECT vid, playing, pos, at, by FROM living WHERE id = 1'),
   livePut: db.prepare('INSERT OR REPLACE INTO living (id, vid, playing, pos, at, by) VALUES (1, ?, ?, ?, ?, ?)'),
-  liveDel: db.prepare('DELETE FROM living')
+  liveDel: db.prepare('DELETE FROM living'),
+  tickerGet: db.prepare('SELECT lines FROM ticker WHERE id = 1'),
+  tickerPut: db.prepare('INSERT OR REPLACE INTO ticker (id, lines, by, ts) VALUES (1, ?, ?, ?)')
 };
 
 // ---------- helpers ----------
@@ -379,8 +382,31 @@ app.get('/api/state', requireUser, (req, res) => {
     emojis: q.emojis.all(),
     notifs: q.notifs.all(req.user.id).map(n => ({ ...n, seen: !!n.seen })),
     stats: { messages: q.myMessages.get(req.user.id).n },
-    live: liveState()
+    live: liveState(),
+    ticker: tickerLines()
   });
+});
+
+// The moving banner: anyone can change its phrases. null means use the built-in ones.
+function tickerLines() {
+  const row = q.tickerGet.get();
+  return row ? JSON.parse(row.lines) : null;
+}
+app.post('/api/ticker', requireUser, (req, res) => {
+  const raw = req.body?.lines;
+  if (!Array.isArray(raw) || raw.length > 8) return res.status(400).json({ error: 'ticker' });
+  const lines = [];
+  for (const l of raw) {
+    const t = oneLine(l, 100);
+    if (t === null) return res.status(400).json({ error: 'ticker' });
+    if (t) lines.push(t);
+  }
+  if (JSON.stringify(lines) !== JSON.stringify(tickerLines())) {
+    q.tickerPut.run(JSON.stringify(lines), req.user.id, now());
+    sys(`${req.user.name} cambió el banner`);
+    changed();
+  }
+  res.json({ ok: true });
 });
 
 app.post('/api/nickname', requireUser, (req, res) => {

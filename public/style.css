@@ -56,6 +56,11 @@ textarea.input { min-height: 70px; resize: vertical; }
 .ticker span { display: inline-block; padding-left: 100%; animation: marquee 32s linear infinite; }
 @keyframes marquee { from { transform: translateX(0); } to { transform: translateX(-100%); } }
 @media (prefers-reduced-motion: reduce) { .ticker span { animation: none; padding-left: 10px; } }
+.ticker-wrap { display: flex; flex-wrap: wrap; gap: 4px; align-items: stretch; }
+.ticker-wrap .ticker { flex: 1 1 0; min-width: 0; }
+.ticker-edit { flex: none; }
+.ticker-wrap.editing .ticker-edit { display: none; }
+.ticker-form { flex: 1 1 100%; display: flex; flex-direction: column; gap: 6px; padding: 8px; }
 
 .cols { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start; }
 .side { flex: 1 1 200px; max-width: 100%; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
