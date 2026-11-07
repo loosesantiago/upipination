@@ -3,7 +3,7 @@
   const TZ = 'America/Argentina/Buenos_Aires', LOC = 'es-AR', DAY = 864e5;
   const FILE_RE = /^[a-f0-9]{32}\.(jpg|png|gif|webp|mp4|webm|mov)$/;
   const app = document.getElementById('app');
-  const S = { me: null, users: {}, chat: [], posts: [], events: [], art: [], emojis: [], notifs: [], online: [], stats: { messages: 0 }, live: { vid: null }, ticker: null, banner: [], tab: 'posts', picker: null, typing: {}, dark: false };
+  const S = { me: null, users: {}, chat: [], posts: [], events: [], art: [], emojis: [], notifs: [], online: [], stats: { messages: 0 }, live: { vid: null }, ticker: null, banner: [], music: [], tab: 'posts', picker: null, typing: {}, dark: false };
   const R = {};
   let sock = null;
   try { S.dark = localStorage.getItem('upi_theme') === 'dark'; } catch (e) {}
@@ -60,6 +60,9 @@
     emoji_taken: 'Ese nombre de emote ya lo usa otra persona.',
     empty: 'Escribí algo o agregá una foto.',
     name: 'El nombre debe tener entre 1 y 24 caracteres.',
+    music_link: 'Ese link no parece de YouTube.',
+    music_blocked: 'Ese video no existe o YouTube no deja reproducirlo fuera de su página.',
+    music_full: 'La lista de música está llena (300 canciones). Sacá alguna primero.',
     banner_full: 'El banner ya tiene 60 fotos. Sacá alguna antes de agregar más.',
     ticker: 'El banner admite hasta 8 frases de 100 caracteres cada una.',
     auth: 'Tu sesión terminó. Volvé a iniciar sesión.'
@@ -170,7 +173,7 @@
     S.me = st.me; S.users = {};
     st.users.forEach(u => { S.users[u.id] = u; });
     S.live = st.live; liveClock(st.live);
-    Object.assign(S, { chat: st.chat, posts: st.posts, events: st.events, art: st.art, emojis: st.emojis, notifs: st.notifs, stats: st.stats, online: st.online, ticker: st.ticker, banner: st.banner });
+    Object.assign(S, { chat: st.chat, posts: st.posts, events: st.events, art: st.art, emojis: st.emojis, notifs: st.notifs, stats: st.stats, online: st.online, ticker: st.ticker, banner: st.banner, music: st.music });
     buildMentionRe();
   }
   let reloadTimer;
@@ -214,7 +217,8 @@
     R.profile = h('div', { class: 'profile' });
     const left = h('aside', { class: 'side' },
       h('div', { class: 'box' }, h('div', { class: 'bar' }, 'Quién está conectado'), R.onlineCount, R.onlineList),
-      box('Mi perfil', R.profile));
+      box('Mi perfil', R.profile),
+      musicBox());
 
     R.chatCount = h('span', { class: 'small' });
     R.log = h('div', { class: 'log' });
@@ -275,7 +279,7 @@
   function refreshAll() {
     updateMe(); updateOnline();
     if (!R.editingNick) updateProfile();
-    updateTicker(); updateCollage(); updateSide(); updateBadge(); updateSection();
+    updateTicker(); updateCollage(); updateMusic(); updateSide(); updateBadge(); updateSection();
     if (S.picker) updatePicker();
   }
   function updateMe() {
@@ -372,6 +376,100 @@
       goingText: names.length ? names.length + (names.length === 1 ? ' va' : ' van') : 'Nadie todavía',
       goingNames: names.length ? 'Van: ' + names.join(', ') : 'Nadie confirmó todavía'
     };
+  }
+
+  // ---------- music: shared queue, everyone plays it on their own ----------
+  const MU = { id: null, at: 0, player: null, ready: false, playing: false, fails: 0 };
+  function musicBox() {
+    R.musicGif = h('img', { class: 'pirate', src: '/img/pirate-radio.gif', alt: 'Pirata bailando con una radio' });
+    R.musicNow = h('div', { class: 'music-now small' });
+    R.musicPlay = h('button', { type: 'button', class: 'btn', title: 'Reproducir / pausar', onclick: musicToggle }, '▶');
+    R.musicStage = h('div', { class: 'music-stage hidden' });
+    R.musicList = h('ol', { class: 'music-list' });
+    R.musicCount = h('span', { class: 'small' });
+    const url = h('input', { class: 'input', type: 'url', maxLength: 300, placeholder: 'Link de YouTube' });
+    const add = h('button', { type: 'submit', class: 'btn' }, 'Agregar');
+    const form = h('form', {
+      class: 'music-add',
+      onsubmit: async e => {
+        e.preventDefault();
+        const v = url.value.trim();
+        if (!v) return;
+        add.disabled = true;
+        try { await api('/api/music', { url: v }); url.value = ''; } catch (x) { toast(errMsg(x)); }
+        add.disabled = false;
+      }
+    }, url, add);
+    return h('div', { class: 'box music' },
+      h('div', { class: 'bar' }, h('span', null, 'Música'), R.musicCount),
+      h('div', { class: 'music-deck' }, R.musicGif, R.musicNow,
+        h('div', { class: 'music-ctl' },
+          h('button', { type: 'button', class: 'btn', title: 'Anterior', onclick: () => musicStep(-1) }, '⏮'),
+          R.musicPlay,
+          h('button', { type: 'button', class: 'btn', title: 'Siguiente', onclick: () => musicStep(1) }, '⏭'))),
+      R.musicStage, R.musicList, form);
+  }
+  function updateMusic() {
+    if (!R.musicList) return;
+    const list = S.music;
+    R.musicCount.textContent = list.length === 1 ? '1 canción' : `${list.length} canciones`;
+    R.musicList.replaceChildren(...(list.length ? list.map(m => h('li', { class: m.id === MU.id ? 'on' : '' },
+      h('button', { type: 'button', class: 'linkbtn music-title', title: m.title, onclick: () => musicPlay(m) }, m.title),
+      h('span', { class: 'tiny muted' }, userOf(m.uid).name),
+      h('button', {
+        type: 'button', class: 'btn music-x', title: 'Sacar de la lista',
+        onclick: async () => {
+          if (!confirm(`¿Sacar "${m.title}" de la lista?`)) return;
+          try { await api(`/api/music/${m.id}/delete`, {}); } catch (x) { toast(errMsg(x)); }
+        }
+      }, 'x'))) : [h('li', { class: 'muted small empty-li' }, 'Todavía no hay música. Pegá un link de YouTube abajo.')]));
+    const cur = list.find(m => m.id === MU.id);
+    R.musicNow.replaceChildren(cur ? h('b', { title: cur.title }, cur.title) : h('span', { class: 'muted' }, MU.id ? 'Esa canción se sacó de la lista' : 'Nada sonando'));
+    R.musicPlay.textContent = MU.playing ? '⏸' : '▶';
+    R.musicGif.classList.toggle('still', !MU.playing);
+  }
+  async function musicPlay(m) {
+    MU.id = m.id;
+    MU.at = S.music.indexOf(m);
+    R.musicStage.classList.remove('hidden');
+    if (MU.player && MU.ready) {
+      MU.player.loadVideoById(m.vid);
+    } else if (!MU.player) {
+      const iframe = h('iframe', {
+        title: 'Música', allow: 'autoplay; encrypted-media', referrerpolicy: 'strict-origin-when-cross-origin', // YouTube refuses to play embeds without it
+        src: `https://www.youtube-nocookie.com/embed/${m.vid}?enablejsapi=1&playsinline=1&rel=0&autoplay=1&origin=${encodeURIComponent(location.origin)}`
+      });
+      R.musicStage.replaceChildren(iframe);
+      try { await loadYT(); } catch (e) { toast('No se pudo cargar el reproductor de YouTube.'); return; }
+      MU.player = new window.YT.Player(iframe, {
+        events: {
+          onReady: () => {
+            MU.ready = true;
+            const want = S.music.find(x => x.id === MU.id);
+            if (want && want.vid !== m.vid) MU.player.loadVideoById(want.vid); // picked another song while loading
+          },
+          onStateChange: e => {
+            if (e.data === 0) return musicStep(1); // ended
+            if (e.data === 1) MU.fails = 0;
+            if (e.data === 1 || e.data === 2) { MU.playing = e.data === 1; updateMusic(); }
+          },
+          onError: () => { if (++MU.fails < S.music.length) setTimeout(() => musicStep(1), 1500); else { MU.playing = false; updateMusic(); } } // unplayable: skip it, but stop if nothing plays
+        }
+      });
+    }
+    updateMusic();
+  }
+  function musicStep(d) {
+    const list = S.music;
+    if (!list.length) return;
+    let i = list.findIndex(m => m.id === MU.id);
+    // song removed while playing: continue from where it was
+    if (i < 0) i = MU.id === null ? (d > 0 ? -1 : 0) : Math.min(MU.at, list.length) - (d > 0 ? 1 : 0);
+    musicPlay(list[(i + d + list.length) % list.length]);
+  }
+  function musicToggle() {
+    if (!MU.player || !MU.ready) return S.music.length ? (MU.player ? null : musicPlay(S.music[0])) : null;
+    if (MU.playing) MU.player.pauseVideo(); else MU.player.playVideo();
   }
 
   // ---------- header photo collage ----------

@@ -55,6 +55,7 @@ CREATE INDEX IF NOT EXISTS notifs_user ON notifs(user_id, id);
 CREATE TABLE IF NOT EXISTS living (id INTEGER PRIMARY KEY CHECK (id = 1), vid TEXT NOT NULL, playing INTEGER NOT NULL, pos REAL NOT NULL, at INTEGER NOT NULL, by INTEGER);
 CREATE TABLE IF NOT EXISTS ticker (id INTEGER PRIMARY KEY CHECK (id = 1), lines TEXT NOT NULL, by INTEGER, ts INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS banner (id INTEGER PRIMARY KEY, file TEXT NOT NULL, user_id INTEGER, ts INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS music (id INTEGER PRIMARY KEY, vid TEXT NOT NULL, title TEXT NOT NULL, user_id INTEGER, ts INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS yeahs (post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, ts INTEGER NOT NULL, PRIMARY KEY (post_id, user_id));
 `);
 
@@ -120,6 +121,11 @@ const q = {
   bannerGet: db.prepare('SELECT file FROM banner WHERE id = ?'),
   bannerAdd: db.prepare('INSERT INTO banner (file, user_id, ts) VALUES (?, ?, ?)'),
   bannerDel: db.prepare('DELETE FROM banner WHERE id = ?'),
+  music: db.prepare('SELECT id, vid, title, user_id AS uid FROM music ORDER BY id'),
+  musicCount: db.prepare('SELECT COUNT(*) AS n FROM music'),
+  musicGet: db.prepare('SELECT title FROM music WHERE id = ?'),
+  musicAdd: db.prepare('INSERT INTO music (vid, title, user_id, ts) VALUES (?, ?, ?, ?)'),
+  musicDel: db.prepare('DELETE FROM music WHERE id = ?'),
   tickerGet: db.prepare('SELECT lines FROM ticker WHERE id = 1'),
   tickerPut: db.prepare('INSERT OR REPLACE INTO ticker (id, lines, by, ts) VALUES (1, ?, ?, ?)')
 };
@@ -398,7 +404,8 @@ app.get('/api/state', requireUser, (req, res) => {
     stats: { messages: q.myMessages.get(req.user.id).n },
     live: liveState(),
     ticker: tickerLines(),
-    banner: q.banner.all()
+    banner: q.banner.all(),
+    music: q.music.all()
   });
 });
 
@@ -443,6 +450,39 @@ app.post('/api/banner/:id/delete', requireUser, (req, res) => {
   q.bannerDel.run(id);
   if (FILE_RE.test(row.file)) fs.rmSync(path.join(UP, row.file), { force: true });
   sys(`${req.user.name} sacó una foto del banner`);
+  changed();
+  res.json({ ok: true });
+});
+
+// Music: a shared queue of YouTube songs; everyone plays it on their own.
+const MUSIC_MAX = 300;
+// ask YouTube for the song's title; also tells us when a video doesn't exist or can't be embedded
+async function youtubeTitle(vid) {
+  try {
+    const r = await fetch(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent('https://www.youtube.com/watch?v=' + vid)}`, { signal: AbortSignal.timeout(5000) });
+    if (r.status === 401 || r.status === 403 || r.status === 404 || r.status === 400) return null;
+    if (!r.ok) return 'Video de YouTube';
+    const j = await r.json();
+    return oneLine(String(j.title || ''), 200, 1) || 'Video de YouTube';
+  } catch (e) { return 'Video de YouTube'; } // YouTube unreachable: keep the song anyway
+}
+app.post('/api/music', requireUser, A(async (req, res) => {
+  const yt = youtubeId(req.body?.url);
+  if (!yt) return res.status(400).json({ error: 'music_link' });
+  if (q.musicCount.get().n >= MUSIC_MAX) return res.status(400).json({ error: 'music_full' });
+  const title = await youtubeTitle(yt.vid);
+  if (!title) return res.status(400).json({ error: 'music_blocked' });
+  q.musicAdd.run(yt.vid, title, req.user.id, now());
+  sys(`${req.user.name} agregó a la música: ${title}`);
+  changed();
+  res.json({ ok: true });
+}));
+app.post('/api/music/:id/delete', requireUser, (req, res) => {
+  const id = toId(req.params.id);
+  const row = id && q.musicGet.get(id);
+  if (!row) return res.status(400).json({ error: 'bad_request' });
+  q.musicDel.run(id);
+  sys(`${req.user.name} sacó de la música: ${row.title}`);
   changed();
   res.json({ ok: true });
 });
