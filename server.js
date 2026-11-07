@@ -37,6 +37,7 @@ for (const f of fs.readdirSync(TMP)) fs.rmSync(path.join(TMP, f), { force: true 
 const db = new Database(path.join(DATA, 'upipination.db'));
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
+const hadBanner = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'banner'").get();
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT UNIQUE NOT NULL, name TEXT NOT NULL, pw TEXT NOT NULL, avatar TEXT, created INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires INTEGER NOT NULL);
@@ -53,8 +54,16 @@ CREATE TABLE IF NOT EXISTS notifs (id INTEGER PRIMARY KEY, user_id INTEGER NOT N
 CREATE INDEX IF NOT EXISTS notifs_user ON notifs(user_id, id);
 CREATE TABLE IF NOT EXISTS living (id INTEGER PRIMARY KEY CHECK (id = 1), vid TEXT NOT NULL, playing INTEGER NOT NULL, pos REAL NOT NULL, at INTEGER NOT NULL, by INTEGER);
 CREATE TABLE IF NOT EXISTS ticker (id INTEGER PRIMARY KEY CHECK (id = 1), lines TEXT NOT NULL, by INTEGER, ts INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS banner (id INTEGER PRIMARY KEY, file TEXT NOT NULL, user_id INTEGER, ts INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS yeahs (post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, ts INTEGER NOT NULL, PRIMARY KEY (post_id, user_id));
 `);
+
+// the header photos start as the 8 built-in cats; after that people add and remove them
+const CAT_RE = /^cat-[1-8]\.png$/;
+if (!hadBanner) {
+  const add = db.prepare('INSERT INTO banner (file, user_id, ts) VALUES (?, NULL, ?)');
+  for (let i = 1; i <= 8; i++) add.run(`cat-${i}.png`, Date.now());
+}
 
 const q = {
   userBySession: db.prepare('SELECT u.id, u.username, u.name, u.avatar, s.token AS sid FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.expires > ?'),
@@ -106,6 +115,11 @@ const q = {
   liveGet: db.prepare('SELECT vid, playing, pos, at, by FROM living WHERE id = 1'),
   livePut: db.prepare('INSERT OR REPLACE INTO living (id, vid, playing, pos, at, by) VALUES (1, ?, ?, ?, ?, ?)'),
   liveDel: db.prepare('DELETE FROM living'),
+  banner: db.prepare('SELECT id, file, user_id AS uid FROM banner ORDER BY id'),
+  bannerCount: db.prepare('SELECT COUNT(*) AS n FROM banner'),
+  bannerGet: db.prepare('SELECT file FROM banner WHERE id = ?'),
+  bannerAdd: db.prepare('INSERT INTO banner (file, user_id, ts) VALUES (?, ?, ?)'),
+  bannerDel: db.prepare('DELETE FROM banner WHERE id = ?'),
   tickerGet: db.prepare('SELECT lines FROM ticker WHERE id = 1'),
   tickerPut: db.prepare('INSERT OR REPLACE INTO ticker (id, lines, by, ts) VALUES (1, ?, ?, ?)')
 };
@@ -383,7 +397,8 @@ app.get('/api/state', requireUser, (req, res) => {
     notifs: q.notifs.all(req.user.id).map(n => ({ ...n, seen: !!n.seen })),
     stats: { messages: q.myMessages.get(req.user.id).n },
     live: liveState(),
-    ticker: tickerLines()
+    ticker: tickerLines(),
+    banner: q.banner.all()
   });
 });
 
@@ -406,6 +421,29 @@ app.post('/api/ticker', requireUser, (req, res) => {
     sys(`${req.user.name} cambió el banner`);
     changed();
   }
+  res.json({ ok: true });
+});
+
+// Header photo collage: anyone can add or remove photos.
+const BANNER_MAX = 60;
+app.post('/api/banner', requireUser, files('files', 6), (req, res) => {
+  const list = req.files || [];
+  if (!list.length) return res.status(400).json({ error: 'file' });
+  if (q.bannerCount.get().n + list.length > BANNER_MAX) { drop(list); return res.status(400).json({ error: 'banner_full' }); }
+  const t = now();
+  for (const f of keep(list, IMG, 8e6)) q.bannerAdd.run(f, req.user.id, t);
+  sys(`${req.user.name} agregó ${list.length === 1 ? 'una foto' : list.length + ' fotos'} al banner`);
+  changed();
+  res.json({ ok: true });
+});
+app.post('/api/banner/:id/delete', requireUser, (req, res) => {
+  const id = toId(req.params.id);
+  const row = id && q.bannerGet.get(id);
+  if (!row) return res.status(400).json({ error: 'bad_request' });
+  q.bannerDel.run(id);
+  if (FILE_RE.test(row.file)) fs.rmSync(path.join(UP, row.file), { force: true });
+  sys(`${req.user.name} sacó una foto del banner`);
+  changed();
   res.json({ ok: true });
 });
 

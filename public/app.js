@@ -3,7 +3,7 @@
   const TZ = 'America/Argentina/Buenos_Aires', LOC = 'es-AR', DAY = 864e5;
   const FILE_RE = /^[a-f0-9]{32}\.(jpg|png|gif|webp|mp4|webm|mov)$/;
   const app = document.getElementById('app');
-  const S = { me: null, users: {}, chat: [], posts: [], events: [], art: [], emojis: [], notifs: [], online: [], stats: { messages: 0 }, live: { vid: null }, ticker: null, tab: 'posts', picker: null, typing: {}, dark: false };
+  const S = { me: null, users: {}, chat: [], posts: [], events: [], art: [], emojis: [], notifs: [], online: [], stats: { messages: 0 }, live: { vid: null }, ticker: null, banner: [], tab: 'posts', picker: null, typing: {}, dark: false };
   const R = {};
   let sock = null;
   try { S.dark = localStorage.getItem('upi_theme') === 'dark'; } catch (e) {}
@@ -60,6 +60,7 @@
     emoji_taken: 'Ese nombre de emote ya lo usa otra persona.',
     empty: 'Escribí algo o agregá una foto.',
     name: 'El nombre debe tener entre 1 y 24 caracteres.',
+    banner_full: 'El banner ya tiene 60 fotos. Sacá alguna antes de agregar más.',
     ticker: 'El banner admite hasta 8 frases de 100 caracteres cada una.',
     auth: 'Tu sesión terminó. Volvé a iniciar sesión.'
   };
@@ -169,7 +170,7 @@
     S.me = st.me; S.users = {};
     st.users.forEach(u => { S.users[u.id] = u; });
     S.live = st.live; liveClock(st.live);
-    Object.assign(S, { chat: st.chat, posts: st.posts, events: st.events, art: st.art, emojis: st.emojis, notifs: st.notifs, stats: st.stats, online: st.online, ticker: st.ticker });
+    Object.assign(S, { chat: st.chat, posts: st.posts, events: st.events, art: st.art, emojis: st.emojis, notifs: st.notifs, stats: st.stats, online: st.online, ticker: st.ticker, banner: st.banner });
     buildMentionRe();
   }
   let reloadTimer;
@@ -187,15 +188,14 @@
   }
 
   function buildApp() {
-    const cats = [[6, '50% 30%', -5, 4, 200], [1, '50% 35%', 3, -8, 180], [2, '50% 45%', -2, 12, 210], [8, '45% 60%', 4, -4, 185], [3, '50% 55%', -3, 8, 205], [4, '60% 50%', 2, -10, 180], [7, '50% 55%', -4, 6, 200], [5, '50% 35%', 5, -6, 190]];
-    const collage = h('div', { class: 'collage-row' }, cats.map(([n, pos, rot, dy, ht], i) => h('img', {
-      src: `/img/cat-${n}.png`, alt: '',
-      style: { objectPosition: pos, height: ht + 'px', transform: `translateY(${dy}px) rotate(${rot}deg) scale(1.08)`, zIndex: String(i % 2 ? 2 : 1) }
-    })));
+    R.collage = h('div', { class: 'collage-row' });
+    const collage = h('div', null, R.collage,
+      h('button', { type: 'button', class: 'btn collage-edit', title: 'Cambiar las fotos de arriba', onclick: editBanner }, '✎ Fotos'));
     R.greet = h('b');
     R.clock = h('span', { class: 'muted' });
     const header = h('header', { class: 'box' },
       h('div', { class: 'collage' }, collage, h('div', { class: 'title-plate' }, 'Upipination')),
+      (R.bannerPanel = h('div', { class: 'banner-panel hidden' })),
       h('div', { class: 'userbar' },
         h('span', null, 'Hola de nuevo, ', R.greet, ' · ', h('a', { href: '#', onclick: e => { e.preventDefault(); logout(); } }, 'Cerrar sesión')),
         h('div', { class: 'inline-form' }, R.clock, themeBtn())));
@@ -275,7 +275,7 @@
   function refreshAll() {
     updateMe(); updateOnline();
     if (!R.editingNick) updateProfile();
-    updateTicker(); updateSide(); updateBadge(); updateSection();
+    updateTicker(); updateCollage(); updateSide(); updateBadge(); updateSection();
     if (S.picker) updatePicker();
   }
   function updateMe() {
@@ -372,6 +372,85 @@
       goingText: names.length ? names.length + (names.length === 1 ? ' va' : ' van') : 'Nadie todavía',
       goingNames: names.length ? 'Van: ' + names.join(', ') : 'Nadie confirmó todavía'
     };
+  }
+
+  // ---------- header photo collage ----------
+  // 12 tilted frames: [tilt, vertical offset, height]
+  const SLOTS = [[-5, 4, 200], [3, -8, 180], [-2, 12, 210], [4, -4, 185], [-3, 8, 205], [2, -10, 180], [-4, 6, 200], [5, -6, 190], [-2, 10, 195], [3, -6, 185], [-5, 2, 205], [4, -8, 190]];
+  // the built-in cats look best framed on their faces
+  const CAT_POS = { 1: '50% 35%', 2: '50% 45%', 3: '50% 55%', 4: '60% 50%', 5: '50% 35%', 6: '50% 30%', 7: '50% 55%', 8: '45% 60%' };
+  const bannerSrc = f => (/^cat-[1-8]\.png$/.test(f) ? '/img/' + f : up(f));
+  const bannerPos = f => CAT_POS[(f.match(/^cat-([1-8])\.png$/) || [])[1]] || '50% 40%';
+  const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+  function setFrame(img, b) {
+    img.dataset.id = b.id;
+    img.src = bannerSrc(b.file);
+    img.style.objectPosition = bannerPos(b.file);
+  }
+  function updateCollage() {
+    const pool = S.banner.filter(b => bannerSrc(b.file));
+    const key = pool.map(b => b.id).join(',');
+    if (key !== R.collageKey) {
+      R.collageKey = key;
+      const shown = shuffle(pool.slice()).slice(0, SLOTS.length);
+      R.collage.replaceChildren(...shown.map((b, i) => {
+        const [rot, dy, ht] = SLOTS[i];
+        const img = h('img', { alt: '', style: { height: ht + 'px', transform: `translateY(${dy}px) rotate(${rot}deg) scale(1.08)`, zIndex: String(i % 2 ? 2 : 1) } });
+        setFrame(img, b);
+        return img;
+      }));
+    }
+    if (R.bannerPanel && !R.bannerPanel.classList.contains('hidden')) drawBannerPanel();
+  }
+  // with more photos than frames, swap one frame for an unseen photo every few seconds
+  setInterval(() => {
+    if (!R.collage || document.hidden || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const frames = [...R.collage.children];
+    const on = new Set(frames.map(f => f.dataset.id));
+    const rest = S.banner.filter(b => bannerSrc(b.file) && !on.has(String(b.id)));
+    if (!frames.length || !rest.length) return;
+    const img = frames[Math.floor(Math.random() * frames.length)];
+    const next = rest[Math.floor(Math.random() * rest.length)];
+    const pre = new Image();
+    pre.onload = () => {
+      img.classList.add('fade');
+      setTimeout(() => { setFrame(img, next); img.classList.remove('fade'); }, 400);
+    };
+    pre.src = bannerSrc(next.file);
+  }, 5000);
+  function editBanner() {
+    const p = R.bannerPanel;
+    p.classList.toggle('hidden');
+    if (!p.classList.contains('hidden')) drawBannerPanel();
+  }
+  function drawBannerPanel() {
+    const pick = h('input', {
+      type: 'file', accept: 'image/jpeg,image/png,image/gif,image/webp', multiple: true,
+      onchange: async e => {
+        const list = [...e.target.files].slice(0, 6);
+        e.target.value = '';
+        if (!list.length) return;
+        const fd = new FormData();
+        for (const f of list) fd.append('files', await fitImage(f, 1200));
+        try { await api('/api/banner', fd, true); } catch (x) { toast(errMsg(x)); }
+      }
+    });
+    R.bannerPanel.replaceChildren(
+      h('div', { class: 'inline-form' },
+        h('b', null, `Fotos del banner (${S.banner.length})`),
+        h('span', { class: 'small muted' }, 'Se muestran 12 a la vez y van rotando. Cualquiera puede agregar o sacar.'),
+        h('span', { class: 'spacer' }),
+        h('label', { class: 'btn' }, 'Agregar fotos', pick),
+        h('button', { type: 'button', class: 'btn', onclick: editBanner }, 'Cerrar')),
+      h('div', { class: 'banner-grid' }, S.banner.filter(b => bannerSrc(b.file)).map(b => h('div', { class: 'thumb' },
+        h('img', { src: bannerSrc(b.file), alt: '', loading: 'lazy' }),
+        h('button', {
+          type: 'button', class: 'btn', title: 'Sacar del banner',
+          onclick: async () => {
+            if (!confirm('¿Sacar esta foto del banner?')) return;
+            try { await api(`/api/banner/${b.id}/delete`, {}); } catch (x) { toast(errMsg(x)); }
+          }
+        }, 'x')))));
   }
 
   const TICKER_DEFAULT = ['Bienvenidos a Upipination', 'Subí tu arte a la galería', 'Buena onda siempre'];
