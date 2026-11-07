@@ -3,7 +3,7 @@
   const TZ = 'America/Argentina/Buenos_Aires', LOC = 'es-AR', DAY = 864e5;
   const FILE_RE = /^[a-f0-9]{32}\.(jpg|png|gif|webp|mp4|webm|mov)$/;
   const app = document.getElementById('app');
-  const S = { me: null, users: {}, chat: [], posts: [], events: [], art: [], emojis: [], notifs: [], online: [], stats: { messages: 0 }, live: { vid: null }, ticker: null, banner: [], music: [], tab: 'posts', picker: null, typing: {}, dark: false };
+  const S = { me: null, users: {}, chat: [], posts: [], events: [], art: [], emojis: [], notifs: [], online: [], stats: { messages: 0 }, live: { vid: null }, ticker: null, banner: [], music: [], radio: { id: null }, tab: 'posts', picker: null, typing: {}, dark: false };
   const R = {};
   let sock = null;
   try { S.dark = localStorage.getItem('upi_theme') === 'dark'; } catch (e) {}
@@ -173,7 +173,7 @@
     S.me = st.me; S.users = {};
     st.users.forEach(u => { S.users[u.id] = u; });
     S.live = st.live; liveClock(st.live);
-    Object.assign(S, { chat: st.chat, posts: st.posts, events: st.events, art: st.art, emojis: st.emojis, notifs: st.notifs, stats: st.stats, online: st.online, ticker: st.ticker, banner: st.banner, music: st.music });
+    Object.assign(S, { chat: st.chat, posts: st.posts, events: st.events, art: st.art, emojis: st.emojis, notifs: st.notifs, stats: st.stats, online: st.online, ticker: st.ticker, banner: st.banner, music: st.music, radio: st.radio });
     buildMentionRe();
   }
   let reloadTimer;
@@ -378,12 +378,21 @@
     };
   }
 
-  // ---------- music: shared queue, everyone plays it on their own ----------
-  const MU = { id: null, at: 0, player: null, ready: false, playing: false, fails: 0 };
+  // ---------- music: shared queue played as a radio, in sync for everyone online ----------
+  // The server says which song, where it is and whether it's playing (like Living).
+  // Each browser starts muted (browsers only allow sound after a click) until the person taps "Escuchar".
+  const MU = { vid: null, player: null, ready: false, listening: false, fails: 0, stuck: 0 };
+  let muWant = false; // listening preference, remembered per browser
+  try { muWant = localStorage.getItem('upi_radio') === '1'; } catch (e) {}
+  function radioTarget() {
+    const r = S.radio;
+    return r.playing ? r.pos + (serverNow() - r.at) / 1000 : r.pos;
+  }
   function musicBox() {
     R.musicGif = h('img', { class: 'pirate', src: '/img/pirate-radio.gif', alt: 'Pirata bailando con una radio' });
     R.musicNow = h('div', { class: 'music-now small' });
-    R.musicPlay = h('button', { type: 'button', class: 'btn', title: 'Reproducir / pausar', onclick: musicToggle }, '▶');
+    R.musicPlay = h('button', { type: 'button', class: 'btn', title: 'Reproducir / pausar para todos', onclick: radioToggle }, '▶');
+    R.musicEar = h('button', { type: 'button', class: 'btn music-ear', onclick: radioListen });
     // the video stays loaded (that's what plays the sound) but is tucked away unless someone wants to see it
     R.musicStage = h('div', { class: 'music-stage tucked' });
     R.musicVid = h('button', { type: 'button', class: 'btn', title: 'Mostrar / ocultar el video', hidden: true, onclick: () => { R.musicStage.classList.toggle('tucked'); R.musicVid.classList.toggle('on'); } }, '📺');
@@ -402,22 +411,44 @@
         add.disabled = false;
       }
     }, url, add);
+    setInterval(radioSync, 1000);
     return h('div', { class: 'box music' },
-      h('div', { class: 'bar' }, h('span', null, 'Música'), R.musicCount),
+      h('div', { class: 'bar' }, h('span', null, 'Radio'), R.musicCount),
       h('div', { class: 'music-deck' }, R.musicGif, R.musicNow,
         h('div', { class: 'music-ctl' },
-          h('button', { type: 'button', class: 'btn', title: 'Anterior', onclick: () => musicStep(-1) }, '⏮'),
+          h('button', { type: 'button', class: 'btn', title: 'Anterior (para todos)', onclick: () => radioSend('radio:prev') }, '⏮'),
           R.musicPlay,
-          h('button', { type: 'button', class: 'btn', title: 'Siguiente', onclick: () => musicStep(1) }, '⏭'),
-          R.musicVid)),
+          h('button', { type: 'button', class: 'btn', title: 'Siguiente (para todos)', onclick: () => radioSend('radio:next') }, '⏭'),
+          R.musicVid),
+        R.musicEar),
       R.musicStage, R.musicList, form);
   }
+  const radioSend = ev => { if (sock && S.radio.id) sock.emit(ev, S.radio.id); };
+  function radioToggle() {
+    if (!sock) return;
+    if (!S.radio.id) { if (S.music.length) sock.emit('radio:play', S.music[0].id); return; }
+    sock.emit('radio:ctl', { id: S.radio.id, playing: !S.radio.playing });
+    if (!S.radio.playing && !MU.listening) radioListen(); // pressing play means you want to hear it
+  }
+  // the click that lets this browser make sound
+  function radioListen() {
+    MU.listening = !MU.listening;
+    muWant = MU.listening;
+    try { localStorage.setItem('upi_radio', muWant ? '1' : '0'); } catch (e) {}
+    if (MU.player && MU.ready) {
+      if (radioAudible()) { MU.player.unMute(); MU.player.setVolume(100); if (S.radio.playing) MU.player.playVideo(); }
+      else MU.player.mute();
+    }
+    updateMusic();
+  }
+  // Living has its own video; don't play both at once for the same person
+  const radioAudible = () => MU.listening && !(S.tab === 'living' && S.live.vid);
   function updateMusic() {
     if (!R.musicList) return;
-    const list = S.music;
+    const list = S.music, r = S.radio;
     R.musicCount.textContent = list.length === 1 ? '1 canción' : `${list.length} canciones`;
-    R.musicList.replaceChildren(...(list.length ? list.map(m => h('li', { class: m.id === MU.id ? 'on' : '' },
-      h('button', { type: 'button', class: 'linkbtn music-title', title: m.title, onclick: () => musicPlay(m) }, m.title),
+    R.musicList.replaceChildren(...(list.length ? list.map(m => h('li', { class: m.id === r.id ? 'on' : '' },
+      h('button', { type: 'button', class: 'linkbtn music-title', title: 'Poner para todos: ' + m.title, onclick: () => { if (sock) sock.emit('radio:play', m.id); if (!MU.listening) radioListen(); } }, m.title),
       h('span', { class: 'tiny muted' }, userOf(m.uid).name),
       h('button', {
         type: 'button', class: 'btn music-x', title: 'Sacar de la lista',
@@ -426,53 +457,70 @@
           try { await api(`/api/music/${m.id}/delete`, {}); } catch (x) { toast(errMsg(x)); }
         }
       }, 'x'))) : [h('li', { class: 'muted small empty-li' }, 'Todavía no hay música. Pegá un link de YouTube abajo.')]));
-    const cur = list.find(m => m.id === MU.id);
-    R.musicNow.replaceChildren(cur ? h('b', { title: cur.title }, cur.title) : h('span', { class: 'muted' }, MU.id ? 'Esa canción se sacó de la lista' : 'Nada sonando'));
-    R.musicPlay.textContent = MU.playing ? '⏸' : '▶';
-    R.musicGif.classList.toggle('still', !MU.playing);
+    R.musicNow.replaceChildren(r.id ? h('b', { title: r.title }, (r.playing ? '' : '(en pausa) ') + r.title) : h('span', { class: 'muted' }, 'La radio está apagada'));
+    R.musicPlay.textContent = r.playing ? '⏸' : '▶';
+    R.musicGif.classList.toggle('still', !(r.playing && MU.listening));
+    R.musicEar.hidden = !r.id;
+    R.musicEar.classList.toggle('call', !MU.listening);
+    R.musicEar.textContent = MU.listening ? '🔇 Silenciar para mí' : '🔊 Escuchar';
+    R.musicEar.title = MU.listening ? 'Deja de sonar solo en tu compu; la radio sigue para los demás' : 'Empezar a escuchar la radio del grupo';
+    radioSync();
   }
-  async function musicPlay(m) {
-    MU.id = m.id;
-    R.musicVid.hidden = false;
-    MU.at = S.music.indexOf(m);
-    if (MU.player && MU.ready) {
-      MU.player.loadVideoById(m.vid);
-    } else if (!MU.player) {
+  // bring this browser's player in line with the radio
+  async function radioSync() {
+    const r = S.radio;
+    if (!R.musicStage) return;
+    if (!r.id) {
+      if (MU.player && MU.ready) MU.player.pauseVideo();
+      return;
+    }
+    if (!MU.player) {
+      if (!r.playing) return; // nothing to hear yet
+      MU.listening = muWant; // may still be blocked until a click; the button stays visible either way
+      MU.vid = r.vid;
       const iframe = h('iframe', {
-        title: 'Música', allow: 'autoplay; encrypted-media', referrerpolicy: 'strict-origin-when-cross-origin', // YouTube refuses to play embeds without it
-        src: `https://www.youtube-nocookie.com/embed/${m.vid}?enablejsapi=1&playsinline=1&rel=0&autoplay=1&origin=${encodeURIComponent(location.origin)}`
+        title: 'Radio', allow: 'autoplay; encrypted-media', referrerpolicy: 'strict-origin-when-cross-origin', // YouTube refuses to play embeds without it
+        src: `https://www.youtube-nocookie.com/embed/${r.vid}?enablejsapi=1&playsinline=1&rel=0&autoplay=1&mute=1&start=${Math.floor(radioTarget())}&origin=${encodeURIComponent(location.origin)}`
       });
       R.musicStage.replaceChildren(iframe);
-      try { await loadYT(); } catch (e) { toast('No se pudo cargar el reproductor de YouTube.'); return; }
+      R.musicVid.hidden = false;
+      MU.player = 'loading';
+      try { await loadYT(); } catch (e) { MU.player = null; return; }
       MU.player = new window.YT.Player(iframe, {
         events: {
-          onReady: () => {
-            MU.ready = true;
-            const want = S.music.find(x => x.id === MU.id);
-            if (want && want.vid !== m.vid) MU.player.loadVideoById(want.vid); // picked another song while loading
-          },
+          onReady: () => { MU.ready = true; if (radioAudible()) MU.player.unMute(); radioSync(); updateMusic(); },
           onStateChange: e => {
-            if (e.data === 0) return musicStep(1); // ended
             if (e.data === 1) MU.fails = 0;
-            if (e.data === 1 || e.data === 2) { MU.playing = e.data === 1; updateMusic(); }
+            if (e.data === 0 && sock) sock.emit('radio:ended', S.radio.id);
           },
-          onError: () => { if (++MU.fails < S.music.length) setTimeout(() => musicStep(1), 1500); else { MU.playing = false; updateMusic(); } } // unplayable: skip it, but stop if nothing plays
+          // can't play here: let the radio move on once it's had a fair chance (the server ignores it if too early)
+          onError: () => { MU.fails++; setTimeout(() => { if (sock && S.radio.vid === MU.vid) sock.emit('radio:ended', S.radio.id); }, 8000); }
         }
       });
+      return;
     }
-    updateMusic();
-  }
-  function musicStep(d) {
-    const list = S.music;
-    if (!list.length) return;
-    let i = list.findIndex(m => m.id === MU.id);
-    // song removed while playing: continue from where it was
-    if (i < 0) i = MU.id === null ? (d > 0 ? -1 : 0) : Math.min(MU.at, list.length) - (d > 0 ? 1 : 0);
-    musicPlay(list[(i + d + list.length) % list.length]);
-  }
-  function musicToggle() {
-    if (!MU.player || !MU.ready) return S.music.length ? (MU.player ? null : musicPlay(S.music[0])) : null;
-    if (MU.playing) MU.player.pauseVideo(); else MU.player.playVideo();
+    if (!MU.ready) return;
+    const p = MU.player, want = radioTarget();
+    if (radioAudible()) { if (p.isMuted()) p.unMute(); } else if (!p.isMuted()) p.mute();
+    if (r.vid !== MU.vid) {
+      MU.vid = r.vid;
+      if (r.playing) p.loadVideoById(r.vid, want); else p.cueVideoById(r.vid, want);
+      return;
+    }
+    const st = p.getPlayerState(), cur = p.getCurrentTime();
+    if (r.playing) {
+      if (st === 0) return; // ended here; waiting for the radio to move on
+      if (Math.abs(cur - want) > 3) p.seekTo(want, true);
+      if (st === 1 || st === 3) MU.stuck = 0;
+      else {
+        p.playVideo();
+        // the browser won't play with sound until this person clicks: go back to muted and show "Escuchar"
+        if (MU.listening && !MU.fails && ++MU.stuck > 3) { MU.stuck = 0; MU.listening = false; p.mute(); p.playVideo(); updateMusic(); }
+      }
+    } else {
+      if (st === 1 || st === 3) p.pauseVideo();
+      if (Math.abs(cur - want) > 1) p.seekTo(want, true);
+    }
   }
 
   // ---------- header photo collage ----------
@@ -1246,6 +1294,7 @@
     sock.on('typing', uid => { S.typing[uid] = Date.now(); renderTyping(); setTimeout(renderTyping, 3100); });
     sock.on('changed', reload);
     sock.on('live', st => { S.live = st; liveClock(st); if (S.tab === 'living') showLive(); });
+    sock.on('radio', st => { S.radio = st; liveClock(st); updateMusic(); });
     sock.on('live:bad', () => toast('Ese link no parece de YouTube.'));
     sock.on('notif', reload);
     sock.on('logout', () => boot());

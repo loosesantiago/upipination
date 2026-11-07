@@ -55,6 +55,8 @@ textarea.input { min-height: 70px; resize: vertical; }
 .music-now { width: 100%; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .music-ctl { display: flex; gap: 4px; }
 .music-ctl .btn { min-width: 36px; justify-content: center; }
+.music-ear { font-weight: normal; }
+.music-ear.call { font-weight: bold; background: var(--tab-on); border-color: var(--accent); color: var(--accent); }
 .music-stage { position: relative; aspect-ratio: 16 / 9; background: #000; }
 /* hidden but still playing: kept rendered off-screen so YouTube keeps working */
 .music-stage.tucked { position: fixed; left: -10000px; top: 0; width: 320px; height: 180px; aspect-ratio: auto; pointer-events: none; }
