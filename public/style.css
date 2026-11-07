@@ -7,7 +7,7 @@ a, .linkbtn { color: var(--link); }
 a:hover, .linkbtn:hover { color: var(--accent); }
 :focus-visible { outline: 1px dotted var(--text); outline-offset: 1px; }
 input[type=file] { display: none; }
-.hidden { display: none !important; }
+.hidden, [hidden] { display: none !important; }
 .muted { color: var(--muted); }
 .small { font-size: 11px; }
 .tiny { font-size: 10px; }
@@ -56,6 +56,9 @@ textarea.input { min-height: 70px; resize: vertical; }
 .music-ctl { display: flex; gap: 4px; }
 .music-ctl .btn { min-width: 36px; justify-content: center; }
 .music-stage { position: relative; aspect-ratio: 16 / 9; background: #000; }
+/* hidden but still playing: kept rendered off-screen so YouTube keeps working */
+.music-stage.tucked { position: fixed; left: -10000px; top: 0; width: 320px; height: 180px; aspect-ratio: auto; pointer-events: none; }
+.music-ctl .btn.on { background: var(--tab-on); border-color: var(--accent); }
 .music-stage iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
 .music-list { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow-y: auto; font-size: 12px; }
 .music-list li { display: flex; align-items: center; gap: 5px; padding: 4px 9px; border-bottom: 1px dotted var(--border); }
