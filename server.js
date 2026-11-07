@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS living (id INTEGER PRIMARY KEY CHECK (id = 1), vid TE
 CREATE TABLE IF NOT EXISTS ticker (id INTEGER PRIMARY KEY CHECK (id = 1), lines TEXT NOT NULL, by INTEGER, ts INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS banner (id INTEGER PRIMARY KEY, file TEXT NOT NULL, user_id INTEGER, ts INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS music (id INTEGER PRIMARY KEY, vid TEXT NOT NULL, title TEXT NOT NULL, user_id INTEGER, ts INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS radio (id INTEGER PRIMARY KEY CHECK (id = 1), song INTEGER NOT NULL, vid TEXT NOT NULL, title TEXT NOT NULL, playing INTEGER NOT NULL, pos REAL NOT NULL, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS yeahs (post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, ts INTEGER NOT NULL, PRIMARY KEY (post_id, user_id));
 `);
 
@@ -126,6 +127,14 @@ const q = {
   musicGet: db.prepare('SELECT title FROM music WHERE id = ?'),
   musicAdd: db.prepare('INSERT INTO music (vid, title, user_id, ts) VALUES (?, ?, ?, ?)'),
   musicDel: db.prepare('DELETE FROM music WHERE id = ?'),
+  songById: db.prepare('SELECT id, vid, title FROM music WHERE id = ?'),
+  songAfter: db.prepare('SELECT id, vid, title FROM music WHERE id > ? ORDER BY id LIMIT 1'),
+  songBefore: db.prepare('SELECT id, vid, title FROM music WHERE id < ? ORDER BY id DESC LIMIT 1'),
+  songFirst: db.prepare('SELECT id, vid, title FROM music ORDER BY id LIMIT 1'),
+  songLast: db.prepare('SELECT id, vid, title FROM music ORDER BY id DESC LIMIT 1'),
+  radioGet: db.prepare('SELECT song, vid, title, playing, pos, at FROM radio WHERE id = 1'),
+  radioPut: db.prepare('INSERT OR REPLACE INTO radio (id, song, vid, title, playing, pos, at) VALUES (1, ?, ?, ?, ?, ?, ?)'),
+  radioDel: db.prepare('DELETE FROM radio'),
   tickerGet: db.prepare('SELECT lines FROM ticker WHERE id = 1'),
   tickerPut: db.prepare('INSERT OR REPLACE INTO ticker (id, lines, by, ts) VALUES (1, ?, ?, ?)')
 };
@@ -405,7 +414,8 @@ app.get('/api/state', requireUser, (req, res) => {
     live: liveState(),
     ticker: tickerLines(),
     banner: q.banner.all(),
-    music: q.music.all()
+    music: q.music.all(),
+    radio: radioState()
   });
 });
 
@@ -690,6 +700,34 @@ function liveState() {
 }
 const emitLive = () => io.emit('live', liveState());
 
+// ---------- Radio: the music queue played in sync for everyone online ----------
+// Same idea as Living: the server keeps which song, where it was (pos) at time `at`, and whether it's playing.
+function radioState() {
+  const r = q.radioGet.get();
+  return r ? { id: r.song, vid: r.vid, title: r.title, playing: !!r.playing, pos: r.pos, at: r.at, now: now() } : { id: null, now: now() };
+}
+const emitRadio = () => io.emit('radio', radioState());
+function radioStart(song) {
+  if (song) q.radioPut.run(song.id, song.vid, song.title, 1, 0, now());
+  else q.radioDel.run(); // list is empty
+  emitRadio();
+}
+// where the current song is right now, in seconds
+const radioPos = r => (r.playing ? r.pos + (now() - r.at) / 1000 : r.pos);
+// nobody online: pause, and pick up from the same spot when someone comes back
+let radioAutoPaused = false;
+function radioIdle() {
+  const r = q.radioGet.get();
+  if (!r || !r.playing) return;
+  q.radioPut.run(r.song, r.vid, r.title, 0, radioPos(r), now());
+  radioAutoPaused = true;
+}
+function radioWake() {
+  const r = q.radioGet.get();
+  if (radioAutoPaused && r && !r.playing) { q.radioPut.run(r.song, r.vid, r.title, 1, r.pos, now()); emitRadio(); }
+  radioAutoPaused = false;
+}
+
 function sys(text) { emitChat(Number(q.addChat.run(null, text, null, 1, now()).lastInsertRowid)); }
 function notify(ids, actorId, kind, ref, ts) {
   for (const id of ids) {
@@ -704,6 +742,7 @@ function kickSession(h) {
 io.on('connection', socket => {
   const uid = socket.data.uid;
   socket.join('u' + uid);
+  if (!online.size) radioWake();
   online.set(uid, (online.get(uid) || 0) + 1);
   presence();
   let windowStart = now(), count = 0, lastTyping = 0;
@@ -753,6 +792,38 @@ io.on('connection', socket => {
     sys(`${q.userById.get(uid)?.name || 'Alguien'} sacó el video de Living`);
   });
 
+  // Radio controls: anyone can play a song, pause, resume or skip, for everyone.
+  // Requests name the song they're about, so double clicks or several people's "ended" only count once.
+  const songId = v => (Number.isInteger(v) && v > 0 ? v : 0);
+  socket.on('radio:play', id => {
+    if (!liveOk()) return;
+    const song = q.songById.get(songId(id));
+    if (!song) return;
+    radioStart(song);
+    sys(`${q.userById.get(uid)?.name || 'Alguien'} puso en la radio: ${song.title}`);
+  });
+  socket.on('radio:ctl', c => {
+    if (!liveOk() || !c || typeof c !== 'object') return;
+    const r = q.radioGet.get();
+    if (!r || c.id !== r.song) return;
+    q.radioPut.run(r.song, r.vid, r.title, c.playing ? 1 : 0, radioPos(r), now());
+    radioAutoPaused = false;
+    emitRadio();
+  });
+  // next / previous / ended all move from the song they name; ended is sent by every listener
+  const step = (id, back) => {
+    const r = q.radioGet.get();
+    if (!r || id !== r.song) return;
+    radioStart(back ? q.songBefore.get(r.song) || q.songLast.get() : q.songAfter.get(r.song) || q.songFirst.get());
+  };
+  socket.on('radio:next', id => { if (liveOk()) step(songId(id), false); });
+  socket.on('radio:prev', id => { if (liveOk()) step(songId(id), true); });
+  socket.on('radio:ended', id => {
+    const r = q.radioGet.get();
+    // only when the song really ran its course (stops a broken or early player from skipping for everyone)
+    if (r && r.playing && songId(id) === r.song && radioPos(r) > 5) step(r.song, false);
+  });
+
   socket.on('typing', () => {
     const t = now();
     if (t - lastTyping < 1500) return;
@@ -763,6 +834,7 @@ io.on('connection', socket => {
   socket.on('disconnect', () => {
     const n = (online.get(uid) || 1) - 1;
     if (n > 0) online.set(uid, n); else online.delete(uid);
+    if (!online.size) radioIdle();
     presence();
   });
 });
