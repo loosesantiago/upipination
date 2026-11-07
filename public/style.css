@@ -45,6 +45,14 @@ textarea.input { min-height: 70px; resize: vertical; }
 .collage-row img { flex: 1 1 0; min-width: 0; object-fit: cover; border: 5px solid #fbf7ee; border-bottom-width: 14px; box-shadow: 2px 3px 6px rgba(0,0,0,.35); position: relative; margin-left: -22px; }
 .collage-row img:first-child { margin-left: -10px; }
 .collage-row img:last-child { margin-right: -10px; }
+.collage-row img { transition: opacity .4s; }
+.collage-row img.fade { opacity: 0; }
+.collage-edit { position: absolute; top: 6px; right: 6px; z-index: 6; opacity: .85; }
+.collage-edit:hover { opacity: 1; }
+.banner-panel { display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); background: var(--row2); }
+.banner-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 6px; }
+.banner-grid .thumb { position: relative; aspect-ratio: 1; border: 1px solid var(--border); }
+.banner-grid .thumb .btn { position: absolute; top: 3px; right: 3px; padding: 0 5px; }
 .title-plate { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%) rotate(-2deg); z-index: 5; padding: 6px 22px; background: var(--ticker); border: 1px solid var(--border); box-shadow: 3px 3px 0 rgba(0,0,0,.25); white-space: nowrap; font: italic bold 44px/1.05 'Trebuchet MS', Verdana, sans-serif; color: var(--tickertext); }
 .userbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 14px; padding: 5px 10px; font-size: 11px; background: var(--row); }
 .nav { display: flex; justify-content: center; flex-wrap: wrap; gap: 4px; }
@@ -197,6 +205,7 @@ textarea.input { min-height: 70px; resize: vertical; }
 @media (max-width: 640px) {
   .title-plate { font-size: 30px; }
   .collage-row img { height: 120px !important; }
+  .collage-row img:nth-child(n+7) { display: none; }
   .chat { height: 520px; }
 }
 
