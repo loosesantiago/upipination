@@ -3,7 +3,7 @@
   const TZ = 'America/Argentina/Buenos_Aires', LOC = 'es-AR', DAY = 864e5;
   const FILE_RE = /^[a-f0-9]{32}\.(jpg|png|gif|webp|mp4|webm|mov)$/;
   const app = document.getElementById('app');
-  const S = { me: null, users: {}, chat: [], posts: [], events: [], art: [], emojis: [], notifs: [], online: [], stats: { messages: 0 }, live: { vid: null }, tab: 'posts', picker: null, typing: {}, dark: false };
+  const S = { me: null, users: {}, chat: [], posts: [], events: [], art: [], emojis: [], notifs: [], online: [], stats: { messages: 0 }, live: { vid: null }, ticker: null, tab: 'posts', picker: null, typing: {}, dark: false };
   const R = {};
   let sock = null;
   try { S.dark = localStorage.getItem('upi_theme') === 'dark'; } catch (e) {}
@@ -60,6 +60,7 @@
     emoji_taken: 'Ese nombre de emote ya lo usa otra persona.',
     empty: 'Escribí algo o agregá una foto.',
     name: 'El nombre debe tener entre 1 y 24 caracteres.',
+    ticker: 'El banner admite hasta 8 frases de 100 caracteres cada una.',
     auth: 'Tu sesión terminó. Volvé a iniciar sesión.'
   };
   const errMsg = e => ERR[e.message] || 'Algo salió mal. Probá de nuevo.';
@@ -168,7 +169,7 @@
     S.me = st.me; S.users = {};
     st.users.forEach(u => { S.users[u.id] = u; });
     S.live = st.live; liveClock(st.live);
-    Object.assign(S, { chat: st.chat, posts: st.posts, events: st.events, art: st.art, emojis: st.emojis, notifs: st.notifs, stats: st.stats, online: st.online });
+    Object.assign(S, { chat: st.chat, posts: st.posts, events: st.events, art: st.art, emojis: st.emojis, notifs: st.notifs, stats: st.stats, online: st.online, ticker: st.ticker });
     buildMentionRe();
   }
   let reloadTimer;
@@ -204,7 +205,9 @@
     R.badge = h('span', { class: 'badge hidden' });
     const nav = h('nav', { class: 'nav' }, TABS.map(([id, label]) => (R.tabBtns[id] = h('button', { type: 'button', onclick: () => goTab(id) }, label, id === 'notifs' ? R.badge : null))));
     R.tickerText = h('span');
-    const ticker = h('div', { class: 'ticker' }, R.tickerText);
+    const ticker = h('div', { class: 'ticker-wrap' },
+      h('div', { class: 'ticker' }, R.tickerText),
+      h('button', { type: 'button', class: 'btn ticker-edit', title: 'Editar el banner', onclick: () => editTicker(ticker) }, '✎ Editar'));
 
     R.onlineCount = h('div', { class: 'small muted count' });
     R.onlineList = h('div');
@@ -371,15 +374,41 @@
     };
   }
 
+  const TICKER_DEFAULT = ['Bienvenidos a Upipination', 'Subí tu arte a la galería', 'Buena onda siempre'];
   function updateTicker() {
     const nx = upcoming()[0];
+    const mine = S.ticker || TICKER_DEFAULT;
     R.tickerText.textContent = [
-      '★ Bienvenidos a Upipination',
-      nx ? `★ Lo que viene: ${nx.title} · ${fmt(nx).dateText}` : '★ No hay eventos todavía, armá uno',
-      `★ ${S.posts.length} posts en el muro`,
-      '★ Subí tu arte a la galería',
-      '★ Buena onda siempre'
-    ].join('       ');
+      ...mine.slice(0, 1),
+      nx ? `Lo que viene: ${nx.title} · ${fmt(nx).dateText}` : 'No hay eventos todavía, armá uno',
+      `${S.posts.length} posts en el muro`,
+      ...mine.slice(1)
+    ].map(t => '★ ' + t).join('       ');
+  }
+  // Swap the banner for a small form; one phrase per line.
+  function editTicker(wrap) {
+    if (wrap.querySelector('form')) return;
+    const text = h('textarea', { class: 'input', rows: 4, placeholder: 'Una frase por línea' });
+    text.value = (S.ticker || TICKER_DEFAULT).join('\n');
+    const save = h('button', { class: 'btn', type: 'submit' }, 'Guardar');
+    const close = () => { form.remove(); wrap.classList.remove('editing'); };
+    const form = h('form', {
+      class: 'ticker-form box',
+      onsubmit: async e => {
+        e.preventDefault();
+        save.disabled = true;
+        try {
+          await api('/api/ticker', { lines: text.value.split('\n') });
+          close();
+        } catch (x) { toast(errMsg(x)); save.disabled = false; }
+      }
+    },
+      h('span', { class: 'small muted' }, 'Frases del banner, una por línea (hasta 8). El próximo evento y la cantidad de posts se agregan solos. Todos ven el cambio.'),
+      text,
+      h('div', { class: 'inline-form' }, save, h('button', { class: 'btn', type: 'button', onclick: close }, 'Cancelar')));
+    wrap.classList.add('editing');
+    wrap.append(form);
+    text.focus();
   }
   function updateSide() {
     const nx = upcoming()[0];
