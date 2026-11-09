@@ -1,0 +1,10 @@
+name = "upipination-maintenance"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+workers_dev = false
+
+# runs in front of the whole site
+routes = [
+  { pattern = "upipination.com/*", zone_name = "upipination.com" },
+  { pattern = "www.upipination.com/*", zone_name = "upipination.com" }
+]
