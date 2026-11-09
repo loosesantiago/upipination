@@ -1276,12 +1276,34 @@
     if (st === 1 && S.live.playing && Math.abs(cur - liveTarget()) > 3) liveSync(); // fell behind or ahead
   }
 
+  // ---------- maintenance pop-up ----------
+  let offTimer = null;
+  function offline(on) {
+    clearTimeout(offTimer);
+    if (!on) { if (R.offline) R.offline.remove(); R.offline = null; return; }
+    offTimer = setTimeout(() => { // short blips (like an update restarting the site) don't show it
+      if (R.offline || (sock && sock.connected)) return;
+      R.offline = h('div', { class: 'offline', role: 'alertdialog', 'aria-live': 'assertive' },
+        h('div', { class: 'box offline-card' },
+          h('div', { class: 'bar' }, 'Upipination en mantenimiento'),
+          h('div', { class: 'offline-body' },
+            h('b', null, '🔧 La página está en mantenimiento.'),
+            h('span', null, 'Se cortó la conexión con el servidor. Puede estar apagado un rato.'),
+            h('span', { class: 'small muted' }, 'No hace falta que hagas nada: la página se reconecta sola apenas vuelva.'),
+            h('span', { class: 'small offline-retry' }, 'Reintentando…'),
+            h('button', { type: 'button', class: 'btn', onclick: () => R.offline && R.offline.classList.add('hidden') }, 'Cerrar'))));
+      document.body.append(R.offline);
+    }, 6000);
+  }
+
   // ---------- realtime ----------
   function connect() {
     if (sock) sock.disconnect();
     let first = true;
     sock = window.io({ withCredentials: true });
-    sock.on('connect', () => { if (!first) reload(); first = false; });
+    sock.on('connect', () => { if (!first) reload(); first = false; offline(false); });
+    // lost the server (PC off, or restarting): after a few seconds, tell people instead of failing silently
+    sock.on('disconnect', reason => { if (reason !== 'io client disconnect') offline(true); });
     sock.on('chat', m => {
       S.chat.push(m);
       if (S.chat.length > 500) { S.chat.shift(); if (R.log.firstChild) R.log.firstChild.remove(); }
