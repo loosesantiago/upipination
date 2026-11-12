@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS ticker (id INTEGER PRIMARY KEY CHECK (id = 1), lines 
 CREATE TABLE IF NOT EXISTS banner (id INTEGER PRIMARY KEY, file TEXT NOT NULL, user_id INTEGER, ts INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS music (id INTEGER PRIMARY KEY, vid TEXT NOT NULL, title TEXT NOT NULL, user_id INTEGER, ts INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS radio (id INTEGER PRIMARY KEY CHECK (id = 1), song INTEGER NOT NULL, vid TEXT NOT NULL, title TEXT NOT NULL, playing INTEGER NOT NULL, pos REAL NOT NULL, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS profiles (user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, banner TEXT, bg TEXT, tagline TEXT NOT NULL DEFAULT '', bio TEXT NOT NULL DEFAULT '', theme TEXT NOT NULL DEFAULT '{}', ts INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS yeahs (post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, ts INTEGER NOT NULL, PRIMARY KEY (post_id, user_id));
 `);
 
@@ -135,6 +136,22 @@ const q = {
   radioGet: db.prepare('SELECT song, vid, title, playing, pos, at FROM radio WHERE id = 1'),
   radioPut: db.prepare('INSERT OR REPLACE INTO radio (id, song, vid, title, playing, pos, at) VALUES (1, ?, ?, ?, ?, ?, ?)'),
   radioDel: db.prepare('DELETE FROM radio'),
+  userFull: db.prepare('SELECT id, name, avatar, created FROM users WHERE id = ?'),
+  profileGet: db.prepare('SELECT banner, bg, tagline, bio, theme FROM profiles WHERE user_id = ?'),
+  profilePut: db.prepare(`INSERT INTO profiles (user_id, tagline, bio, theme, ts) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET tagline = excluded.tagline, bio = excluded.bio, theme = excluded.theme, ts = excluded.ts`),
+  profileImg: {
+    banner: db.prepare('INSERT INTO profiles (user_id, banner, ts) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET banner = excluded.banner, ts = excluded.ts'),
+    bg: db.prepare('INSERT INTO profiles (user_id, bg, ts) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET bg = excluded.bg, ts = excluded.ts')
+  },
+  postsBy: db.prepare('SELECT id, user_id AS uid, text, media, ts FROM posts WHERE user_id = ? ORDER BY id DESC LIMIT 100'),
+  commentsBy: db.prepare('SELECT id, post_id, user_id AS uid, text, ts FROM comments WHERE post_id IN (SELECT id FROM posts WHERE user_id = ? ORDER BY id DESC LIMIT 100) ORDER BY id'),
+  yeahsBy: db.prepare('SELECT post_id, user_id FROM yeahs WHERE post_id IN (SELECT id FROM posts WHERE user_id = ? ORDER BY id DESC LIMIT 100) ORDER BY ts'),
+  artBy: db.prepare('SELECT id, user_id AS uid, file, ts FROM art WHERE user_id = ? ORDER BY id DESC LIMIT 12'),
+  countsBy: db.prepare(`SELECT (SELECT COUNT(*) FROM chat WHERE user_id = @id AND sys = 0) AS messages,
+    (SELECT COUNT(*) FROM posts WHERE user_id = @id) AS posts,
+    (SELECT COUNT(*) FROM art WHERE user_id = @id) AS art,
+    (SELECT COUNT(*) FROM yeahs y JOIN posts p ON p.id = y.post_id WHERE p.user_id = @id) AS yeahs`),
   tickerGet: db.prepare('SELECT lines FROM ticker WHERE id = 1'),
   tickerPut: db.prepare('INSERT OR REPLACE INTO ticker (id, lines, by, ts) VALUES (1, ?, ?, ?)')
 };
@@ -518,6 +535,93 @@ app.post('/api/avatar', requireUser, files('file', 1), (req, res) => {
   changed();
   res.json({ ok: true });
 });
+
+// --- profiles: everyone decorates their own page ---
+// Only known values get stored: colours must be #rrggbb, everything else comes from fixed lists.
+const PROFILE_FONTS = ['default', 'georgia', 'courier', 'trebuchet', 'comic-neue', 'special-elite', 'pacifico', 'lobster', 'bangers', 'creepster', 'permanent-marker', 'press-start-2p', 'vt323', 'orbitron', 'unifrakturcook', 'cinzel'];
+const COLOR_KEYS = ['bg', 'panel', 'text', 'accent', 'bar'];
+function cleanTheme(t) {
+  if (!t || typeof t !== 'object' || Array.isArray(t)) return null;
+  const pick = (v, list) => (list.includes(v) ? v : list[0]);
+  const int = (v, lo, hi, d) => (Number.isInteger(v) && v >= lo && v <= hi ? v : d);
+  let colors = null;
+  if (t.colors != null) {
+    if (typeof t.colors !== 'object') return null;
+    colors = {};
+    for (const k of COLOR_KEYS) {
+      const v = t.colors[k];
+      if (typeof v !== 'string' || !/^#[0-9a-f]{6}$/i.test(v)) return null;
+      colors[k] = v.toLowerCase();
+    }
+  }
+  return {
+    colors,
+    font: pick(t.font, PROFILE_FONTS),
+    hfont: pick(t.hfont, PROFILE_FONTS),
+    bgMode: pick(t.bgMode, ['cover', 'tile', 'tilefix']),
+    glass: int(t.glass, 0, 70, 0),
+    avatar: pick(t.avatar, ['square', 'round']),
+    border: pick(t.border, ['solid', 'dashed', 'dotted', 'double', 'none']),
+    radius: int(t.radius, 0, 16, 0),
+    bannerH: pick(t.bannerH, ['medium', 'short', 'tall']),
+    bannerY: int(t.bannerY, 0, 100, 50),
+    nameFx: pick(t.nameFx, ['none', 'shadow', 'glow', 'rainbow'])
+  };
+}
+const safeFile = f => (f && FILE_RE.test(f) ? f : null);
+
+app.get('/api/profile/:id', requireUser, (req, res) => {
+  const id = toId(req.params.id);
+  const u = id && q.userFull.get(id);
+  if (!u) return res.status(404).json({ error: 'not_found' });
+  const p = q.profileGet.get(id) || {};
+  const byPost = {};
+  for (const c of q.commentsBy.all(id)) (byPost[c.post_id] ||= []).push({ id: c.id, uid: c.uid, text: c.text, ts: c.ts });
+  const yeahsBy = {};
+  for (const y of q.yeahsBy.all(id)) (yeahsBy[y.post_id] ||= []).push(y.user_id);
+  let theme = null;
+  try { theme = cleanTheme(JSON.parse(p.theme || '{}')); } catch (e) {}
+  res.json({
+    id, joined: u.created,
+    banner: safeFile(p.banner), bg: safeFile(p.bg),
+    tagline: p.tagline || '', bio: p.bio || '',
+    theme: theme || cleanTheme({}),
+    stats: q.countsBy.get({ id }),
+    posts: q.postsBy.all(id).map(x => ({ ...x, media: JSON.parse(x.media), comments: byPost[x.id] || [], yeahs: yeahsBy[x.id] || [] })),
+    art: q.artBy.all(id)
+  });
+});
+
+app.post('/api/profile', requireUser, (req, res) => {
+  const b = req.body || {};
+  const tagline = oneLine(b.tagline ?? '', 80);
+  const bio = clean(b.bio ?? '', 1000);
+  const theme = cleanTheme(b.theme);
+  if (tagline === null || bio === null || !theme) return res.status(400).json({ error: 'profile' });
+  q.profilePut.run(req.user.id, tagline, bio, JSON.stringify(theme), now());
+  changed();
+  res.json({ ok: true });
+});
+
+// banner and background pictures: uploading replaces the old one, deleting removes it
+for (const kind of ['banner', 'bg']) {
+  const swap = (uid, file) => {
+    const old = (q.profileGet.get(uid) || {})[kind];
+    q.profileImg[kind].run(uid, file, now());
+    if (old && FILE_RE.test(old)) fs.rmSync(path.join(UP, old), { force: true });
+    changed();
+  };
+  app.post(`/api/profile/${kind}`, requireUser, files('file', 1), (req, res) => {
+    const list = req.files || [];
+    if (list.length !== 1) { drop(list); return res.status(400).json({ error: 'file' }); }
+    swap(req.user.id, keep(list, IMG, 8e6)[0]);
+    res.json({ ok: true });
+  });
+  app.post(`/api/profile/${kind}/delete`, requireUser, (req, res) => {
+    swap(req.user.id, null);
+    res.json({ ok: true });
+  });
+}
 
 app.post('/api/posts', requireUser, files('files', 6), (req, res) => {
   const list = req.files || [];
