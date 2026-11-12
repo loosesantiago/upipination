@@ -64,6 +64,9 @@
     music_blocked: 'Ese video no existe o YouTube no deja reproducirlo fuera de su página.',
     music_full: 'La lista de música está llena (300 canciones). Sacá alguna primero.',
     banner_full: 'El banner ya tiene 60 fotos. Sacá alguna antes de agregar más.',
+    birthday: 'Esa fecha no existe. Revisá el día, el mes y el año.',
+    wish_link: 'Ese link no parece válido. Copialo entero desde la página, por ejemplo https://tienda.com/producto.',
+    wish_full: 'Tu lista ya tiene 50 deseos. Sacá alguno antes de agregar más.',
     profile: 'No se pudo guardar el perfil. Revisá que la frase tenga hasta 80 caracteres y el texto hasta 1000.',
     ticker: 'El banner admite hasta 8 frases de 100 caracteres cada una.',
     auth: 'Tu sesión terminó. Volvé a iniciar sesión.'
@@ -926,7 +929,7 @@
     if (m.sys) return h('div', { class: 'msg sys', 'data-chat': m.id }, `[${clock(m.ts)}] *** ${m.text}`);
     const body = h('span', { class: 'msg-text' }, rich(m.text));
     if (up(m.gif)) body.append(h('img', { class: 'msg-gif', src: up(m.gif), alt: 'Imagen', loading: 'lazy', onclick: () => openLightbox(up(m.gif), `${userOf(m.uid).name} · ${clock(m.ts)}`), onload: () => { if (nearBottom(300)) stick(); } }));
-    return h('div', { class: 'msg' + (m.uid !== S.me.id && mentionsMe(m.text) ? ' tagged' : ''), 'data-chat': m.id }, h('span', { class: 'time' }, `[${clock(m.ts)}]`), avatar(m.uid, 22), h('b', { class: 'nick go', style: { color: colorOf(m.uid) }, title: 'Ver su perfil', onclick: () => openProfile(m.uid) }, userOf(m.uid).name + ':'), body);
+    return h('div', { class: 'msg' + (m.uid !== S.me.id && mentionsMe(m.text) ? ' tagged' : ''), 'data-chat': m.id }, h('span', { class: 'time' }, `[${clock(m.ts)}]`), h('span', { class: 'go', title: 'Ver su perfil', onclick: () => openProfile(m.uid) }, avatar(m.uid, 22)), h('b', { class: 'nick go', style: { color: colorOf(m.uid) }, title: 'Ver su perfil', onclick: () => openProfile(m.uid) }, userOf(m.uid).name + ':'), body);
   }
   const nearBottom = (gap = 80) => R.log.scrollHeight - R.log.scrollTop - R.log.clientHeight < gap;
   function stick() { R.log.scrollTop = R.log.scrollHeight; setTimeout(() => { R.log.scrollTop = R.log.scrollHeight; }, 400); }
@@ -1468,12 +1471,15 @@
       }, sign, emojiBtn(sign), signBtn);
       f.postsTitle = h('span', { class: 'pf-title' });
       f.posts = h('div', { class: 'list' });
+      f.bday = h('div', { class: 'pf-bday' });
+      f.wishes = h('div');
+      f.wishForms = mine ? wishForms(f) : [];
       R.pview.replaceChildren(
         f.people,
         h('section', { class: 'box' }, f.banner, f.head),
         f.editSlot,
         h('div', { class: 'pf-cols' },
-          h('aside', { class: 'pf-side' }, box('Sobre mí', f.bio), box('Números', f.stats), box('Arte', f.art)),
+          h('aside', { class: 'pf-side' }, box('Sobre mí', f.bio), box('Lista de deseos', h('div', null, f.bday, f.wishForms[0], f.wishes, f.wishForms[1])), box('Números', f.stats), box('Arte', f.art)),
           h('div', { class: 'pf-main' },
             h('section', { class: 'box' }, h('div', { class: 'bar' }, f.wallTitle, f.wallCount), signForm, f.wall),
             h('section', { class: 'box' }, h('div', { class: 'bar' }, f.postsTitle),
@@ -1519,6 +1525,7 @@
       editBtn);
 
     f.bio.replaceChildren(...(bio ? rich(bio) : [h('span', { class: 'muted' }, mine ? 'Todavía no escribiste nada sobre vos. Tocá «Editar mi perfil».' : 'Todavía no escribió nada.')]));
+    paintWishes();
     const stat = (k, v) => h('div', null, h('span', { class: 'muted' }, k), h('b', null, String(v)));
     const n = p ? p.stats : {};
     f.stats.replaceChildren(stat('Mensajes en el chat:', n.messages ?? '…'), stat('Posts:', n.posts ?? '…'), stat('Arte:', n.art ?? '…'), stat('Yeahs recibidos:', n.yeahs ?? '…'));
@@ -1526,6 +1533,90 @@
     f.art.replaceChildren(art.length
       ? h('div', { class: 'grid3' }, art.map(a => h('button', { class: 'thumb', type: 'button', onclick: () => openLightbox(up(a.file), `${u.name} · ${ago(a.ts)}`) }, h('img', { src: up(a.file), alt: '', loading: 'lazy' }))))
       : h('span', { class: 'muted' }, p ? 'Todavía no subió arte.' : '…'));
+  }
+  // --- wishlist: birthday + things the person would like, with an optional link to buy each one ---
+  const MONTHS = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+  // 'MM-DD' or 'YYYY-MM-DD'
+  function birthdayInfo(v) {
+    const m = /^(?:(\d{4})-)?(\d{2})-(\d{2})$/.exec(v || '');
+    if (!m) return null;
+    const year = m[1] ? Number(m[1]) : null, month = Number(m[2]), day = Number(m[3]);
+    const [ty, tm, td] = todayAR().split('-').map(Number);
+    const today = Date.UTC(ty, tm - 1, td);
+    let nextYear = ty, next = Date.UTC(ty, month - 1, day); // 29 Feb lands on 1 March in short years
+    if (next < today) { nextYear = ty + 1; next = Date.UTC(nextYear, month - 1, day); }
+    const days = Math.round((next - today) / DAY);
+    return { year, month, day, days, turns: year ? nextYear - year : null, text: `${day} de ${MONTHS[month - 1]}` };
+  }
+  function paintWishes() {
+    const f = R.pf, p = S.prof;
+    if (!f) return;
+    const mine = S.pid === S.me.id, u = userOf(S.pid);
+    const b = p && birthdayInfo(p.birthday);
+    const when = !b ? '' : b.days === 0 ? '¡Es hoy!' : b.days === 1 ? 'Es mañana' : `Faltan ${b.days} días`;
+    f.bday.replaceChildren(...[
+      h('div', null, '🎂 ', h('b', null, 'Cumpleaños: '), b ? b.text : h('span', { class: 'muted' }, !p ? '…' : mine ? 'todavía no lo cargaste' : 'no lo cargó')),
+      b ? h('div', { class: 'small ' + (b.days <= 7 ? 'kicker' : 'muted') }, when + (b.turns ? ` · cumple ${b.turns}` : '')) : null,
+      mine && p ? h('button', { type: 'button', class: 'linkbtn', onclick: () => f.openBirthday(b) }, b ? 'Cambiar la fecha' : 'Cargar mi cumpleaños') : null].filter(Boolean));
+    const list = p ? p.wishes : [];
+    f.wishes.replaceChildren(...(list.length ? list.map(w => {
+      let host = '';
+      try { host = /^https?:\/\//.test(w.url) ? new URL(w.url).hostname.replace(/^www\./, '') : ''; } catch (e) {}
+      return h('div', { class: 'pf-wish' },
+        h('div', { class: 'pf-wish-main' },
+          h('b', null, w.title),
+          host ? h('a', { href: w.url, target: '_blank', rel: 'noopener noreferrer', title: w.url }, `Dónde comprarlo: ${host} ↗`) : null),
+        mine ? h('button', {
+          type: 'button', class: 'btn music-x', title: 'Sacar de la lista',
+          onclick: async () => {
+            if (!confirm(`¿Sacar "${w.title}" de tu lista?`)) return;
+            try { await api(`/api/wishes/${w.id}/delete`, {}); } catch (x) { toast(errMsg(x)); }
+          }
+        }, 'x') : null);
+    }) : [h('div', { class: 'pf-wish muted small' }, !p ? 'Cargando…' : mine ? 'Tu lista está vacía. Agregá abajo lo que te gustaría que te regalen.' : `${u.name} todavía no anotó ningún deseo.`)]));
+  }
+  // the owner's two little forms (built once, so typing isn't lost when the page refreshes)
+  function wishForms(f) {
+    const day = h('select', { class: 'input' }, Array.from({ length: 31 }, (_, i) => h('option', { value: String(i + 1) }, String(i + 1))));
+    const month = h('select', { class: 'input' }, MONTHS.map((m, i) => h('option', { value: String(i + 1) }, m)));
+    const year = h('input', { class: 'input', type: 'number', min: '1900', max: String(new Date().getFullYear()), placeholder: 'Año (opcional)' });
+    const send = async body => {
+      try { await api('/api/profile/birthday', body); bform.classList.add('hidden'); } catch (x) { toast(errMsg(x)); }
+    };
+    const clear = h('button', { class: 'btn', type: 'button', onclick: () => send({ clear: true }) }, 'Quitar');
+    const bform = h('form', {
+      class: 'pf-wish-form hidden',
+      onsubmit: e => {
+        e.preventDefault();
+        const y = year.value.trim();
+        send({ day: Number(day.value), month: Number(month.value), year: y ? Number(y) : null });
+      }
+    },
+      h('div', { class: 'pf-date' }, day, month),
+      year,
+      h('div', { class: 'inline-form' }, h('button', { class: 'btn', type: 'submit' }, 'Guardar'), clear,
+        h('button', { class: 'btn', type: 'button', onclick: () => bform.classList.add('hidden') }, 'Cancelar')));
+    f.openBirthday = b => {
+      if (b) { day.value = String(b.day); month.value = String(b.month); year.value = b.year ? String(b.year) : ''; }
+      clear.hidden = !b;
+      bform.classList.toggle('hidden');
+    };
+
+    const title = h('input', { class: 'input', maxLength: 120, required: true, placeholder: 'Ej: figura de Elden Ring' });
+    const url = h('input', { class: 'input', maxLength: 500, inputmode: 'url', autocapitalize: 'none', spellcheck: 'false', placeholder: 'Link para comprarlo (opcional)' });
+    const add = h('button', { class: 'btn', type: 'submit' }, 'Agregar');
+    const wform = h('form', {
+      class: 'pf-wish-form',
+      onsubmit: async e => {
+        e.preventDefault();
+        if (!title.value.trim()) return;
+        add.disabled = true;
+        try { await api('/api/wishes', { title: title.value, url: url.value.trim() }); title.value = ''; url.value = ''; title.focus(); }
+        catch (x) { toast(errMsg(x)); }
+        add.disabled = false;
+      }
+    }, h('span', { class: 'label' }, 'Agregar un deseo:'), title, url, h('div', { class: 'end' }, add));
+    return [bform, wform];
   }
   function paintProfilePosts() {
     const f = R.pf, p = S.prof;

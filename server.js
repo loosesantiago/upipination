@@ -60,12 +60,19 @@ CREATE TABLE IF NOT EXISTS radio (id INTEGER PRIMARY KEY CHECK (id = 1), song IN
 CREATE TABLE IF NOT EXISTS profiles (user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, banner TEXT, bg TEXT, tagline TEXT NOT NULL DEFAULT '', bio TEXT NOT NULL DEFAULT '', theme TEXT NOT NULL DEFAULT '{}', ts INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS wall (id INTEGER PRIMARY KEY, profile_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, text TEXT NOT NULL, ts INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS wall_profile ON wall(profile_id, id);
+CREATE TABLE IF NOT EXISTS wishes (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, title TEXT NOT NULL, url TEXT NOT NULL DEFAULT '', ts INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS wishes_user ON wishes(user_id, id);
 CREATE TABLE IF NOT EXISTS yeahs (post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, ts INTEGER NOT NULL, PRIMARY KEY (post_id, user_id));
 `);
 
 // notifications can point at a guestbook entry (column added for databases made before the guestbook)
 if (!db.prepare("SELECT 1 FROM pragma_table_info('notifs') WHERE name = 'wall_id'").get()) {
   db.exec('ALTER TABLE notifs ADD COLUMN wall_id INTEGER REFERENCES wall(id) ON DELETE CASCADE');
+}
+
+// birthday: 'MM-DD', or 'YYYY-MM-DD' when the person also gave the year (column added for older databases)
+if (!db.prepare("SELECT 1 FROM pragma_table_info('profiles') WHERE name = 'birthday'").get()) {
+  db.exec('ALTER TABLE profiles ADD COLUMN birthday TEXT');
 }
 
 // the header photos start as the 8 built-in cats; after that people add and remove them
@@ -148,7 +155,13 @@ const q = {
   wallAdd: db.prepare('INSERT INTO wall (profile_id, user_id, text, ts) VALUES (?, ?, ?, ?)'),
   wallDel: db.prepare('DELETE FROM wall WHERE id = ?'),
   userFull: db.prepare('SELECT id, name, avatar, created FROM users WHERE id = ?'),
-  profileGet: db.prepare('SELECT banner, bg, tagline, bio, theme FROM profiles WHERE user_id = ?'),
+  profileGet: db.prepare('SELECT banner, bg, tagline, bio, theme, birthday FROM profiles WHERE user_id = ?'),
+  birthdayPut: db.prepare('INSERT INTO profiles (user_id, birthday, ts) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET birthday = excluded.birthday, ts = excluded.ts'),
+  wishesBy: db.prepare('SELECT id, title, url, ts FROM wishes WHERE user_id = ? ORDER BY id'),
+  wishCount: db.prepare('SELECT COUNT(*) AS n FROM wishes WHERE user_id = ?'),
+  wishGet: db.prepare('SELECT user_id FROM wishes WHERE id = ?'),
+  wishAdd: db.prepare('INSERT INTO wishes (user_id, title, url, ts) VALUES (?, ?, ?, ?)'),
+  wishDel: db.prepare('DELETE FROM wishes WHERE id = ?'),
   profilePut: db.prepare(`INSERT INTO profiles (user_id, tagline, bio, theme, ts) VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(user_id) DO UPDATE SET tagline = excluded.tagline, bio = excluded.bio, theme = excluded.theme, ts = excluded.ts`),
   profileImg: {
@@ -600,8 +613,59 @@ app.get('/api/profile/:id', requireUser, (req, res) => {
     stats: q.countsBy.get({ id }),
     posts: q.postsBy.all(id).map(x => ({ ...x, media: JSON.parse(x.media), comments: byPost[x.id] || [], yeahs: yeahsBy[x.id] || [] })),
     art: q.artBy.all(id),
-    wall: q.wallBy.all(id)
+    wall: q.wallBy.all(id),
+    birthday: /^(\d{4}-)?\d{2}-\d{2}$/.test(p.birthday || '') ? p.birthday : null,
+    wishes: q.wishesBy.all(id)
   });
+});
+
+// Wishlist: your birthday and the things you'd like, each with an optional link to where to buy it.
+const pad2 = n => String(n).padStart(2, '0');
+app.post('/api/profile/birthday', requireUser, (req, res) => {
+  const b = req.body || {};
+  let value = null;
+  if (!b.clear) {
+    const { day, month } = b;
+    const year = b.year == null || b.year === '' ? null : b.year;
+    const okYear = year === null || (Number.isInteger(year) && year >= 1900 && year <= new Date().getFullYear());
+    // 2000 is a leap year, so 29 February is accepted when no year is given
+    const probe = new Date(Date.UTC(year || 2000, month - 1, day));
+    if (!Number.isInteger(day) || !Number.isInteger(month) || !okYear || probe.getUTCMonth() !== month - 1 || probe.getUTCDate() !== day) {
+      return res.status(400).json({ error: 'birthday' });
+    }
+    value = (year ? year + '-' : '') + pad2(month) + '-' + pad2(day);
+  }
+  q.birthdayPut.run(req.user.id, value, now());
+  changed();
+  res.json({ ok: true });
+});
+const WISH_MAX = 50;
+app.post('/api/wishes', requireUser, (req, res) => {
+  const title = oneLine(req.body?.title, 120, 1);
+  const raw = clean(req.body?.url ?? '', 500);
+  if (!title || raw === null) return res.status(400).json({ error: 'bad_request' });
+  let url = '';
+  if (raw) {
+    try {
+      const u = new URL(/^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : 'https://' + raw);
+      if ((u.protocol !== 'http:' && u.protocol !== 'https:') || !u.hostname.includes('.')) throw new Error('link');
+      url = u.href;
+    } catch (e) { return res.status(400).json({ error: 'wish_link' }); }
+    if (url.length > 600) return res.status(400).json({ error: 'wish_link' });
+  }
+  if (q.wishCount.get(req.user.id).n >= WISH_MAX) return res.status(400).json({ error: 'wish_full' });
+  q.wishAdd.run(req.user.id, title, url, now());
+  changed();
+  res.json({ ok: true });
+});
+app.post('/api/wishes/:id/delete', requireUser, (req, res) => {
+  const id = toId(req.params.id);
+  const row = id && q.wishGet.get(id);
+  if (!row) return res.status(400).json({ error: 'bad_request' });
+  if (row.user_id !== req.user.id) return res.status(403).json({ error: 'forbidden' });
+  q.wishDel.run(id);
+  changed();
+  res.json({ ok: true });
 });
 
 // Guestbook: friends leave messages on each other's profile.

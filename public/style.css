@@ -306,6 +306,16 @@ textarea.input { min-height: 70px; resize: vertical; }
 .pf-bio img.ce { display: inline-block; width: 40px; height: 40px; object-fit: contain; vertical-align: middle; }
 .pf-side .stats { border-top: 0; padding: 9px; font-size: 12px; }
 .pf-title { font-family: var(--hfont); }
+.pf-bday { padding: 9px; display: flex; flex-direction: column; gap: 2px; font-size: 12px; border-bottom: 1px dotted var(--border); }
+.pf-wish { display: flex; align-items: flex-start; gap: 6px; padding: 6px 9px; font-size: 12px; border-bottom: 1px dotted var(--border); }
+.pf-wish:nth-child(even) { background: var(--row); }
+.pf-wish-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
+.pf-wish-main b::before { content: '★ '; color: var(--accent); }
+.pf-wish-main a { font-size: 11px; }
+.pf-wish-form { display: flex; flex-direction: column; gap: 6px; padding: 9px; background: var(--row2); border-bottom: 1px dotted var(--border); }
+.pf-wish-form:last-child { border-bottom: 0; }
+.pf-date { display: flex; gap: 5px; }
+.pf-date select:first-child { flex: 0 0 64px; }
 
 .pf-edit { padding: 12px; display: flex; flex-direction: column; gap: 14px; }
 .pf-edit fieldset { margin: 0; padding: 8px 10px 10px; border: 1px dotted var(--border); display: flex; flex-direction: column; gap: 8px; min-width: 0; }
