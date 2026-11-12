@@ -3,7 +3,7 @@
   const TZ = 'America/Argentina/Buenos_Aires', LOC = 'es-AR', DAY = 864e5;
   const FILE_RE = /^[a-f0-9]{32}\.(jpg|png|gif|webp|mp4|webm|mov)$/;
   const app = document.getElementById('app');
-  const S = { me: null, users: {}, chat: [], posts: [], events: [], art: [], emojis: [], notifs: [], online: [], stats: { messages: 0 }, live: { vid: null }, ticker: null, banner: [], music: [], radio: { id: null }, tab: 'posts', picker: null, typing: {}, dark: false };
+  const S = { me: null, users: {}, chat: [], posts: [], events: [], art: [], emojis: [], notifs: [], online: [], stats: { messages: 0 }, live: { vid: null }, ticker: null, banner: [], music: [], radio: { id: null }, tab: 'posts', pid: null, prof: null, picker: null, typing: {}, dark: false };
   const R = {};
   let sock = null;
   try { S.dark = localStorage.getItem('upi_theme') === 'dark'; } catch (e) {}
@@ -64,6 +64,7 @@
     music_blocked: 'Ese video no existe o YouTube no deja reproducirlo fuera de su página.',
     music_full: 'La lista de música está llena (300 canciones). Sacá alguna primero.',
     banner_full: 'El banner ya tiene 60 fotos. Sacá alguna antes de agregar más.',
+    profile: 'No se pudo guardar el perfil. Revisá que la frase tenga hasta 80 caracteres y el texto hasta 1000.',
     ticker: 'El banner admite hasta 8 frases de 100 caracteres cada una.',
     auth: 'Tu sesión terminó. Volvé a iniciar sesión.'
   };
@@ -79,6 +80,7 @@
     S.dark = !S.dark;
     try { localStorage.setItem('upi_theme', S.dark ? 'dark' : 'light'); } catch (e) {}
     applyTheme();
+    if (S.tab === 'profile') paintProfile(); // a profile's look is built on top of light or dark
   }
   const themeBtn = () => h('button', { class: 'btn', type: 'button', 'data-theme-btn': '1', onclick: toggleTheme }, S.dark ? '☀ Modo claro' : '☾ Modo oscuro');
 
@@ -158,6 +160,7 @@
   // ---------- app ----------
   async function boot() {
     applyTheme();
+    clearTheme();
     if (sock) { sock.disconnect(); sock = null; }
     clearInterval(R.clockTimer);
     try {
@@ -167,7 +170,7 @@
       else showGate();
     } catch (e) { showGate(); }
   }
-  async function enter() { await loadState(); buildApp(); connect(); }
+  async function enter() { await loadState(); buildApp(); connect(); routeHash(); }
   async function loadState() {
     const st = await api('/api/state');
     S.me = st.me; S.users = {};
@@ -180,7 +183,7 @@
   function reload() {
     clearTimeout(reloadTimer);
     reloadTimer = setTimeout(async () => {
-      try { await loadState(); refreshAll(); renderChat(); } catch (e) {}
+      try { await loadState(); refreshAll(); renderChat(); if (S.tab === 'profile') loadProfile(); } catch (e) {}
     }, 250);
   }
 
@@ -191,6 +194,8 @@
   }
 
   function buildApp() {
+    if (S.tab === 'profile') S.tab = 'posts';
+    S.pid = null; S.prof = null; R.pf = null; R.draft = null; R.dirty = false;
     R.collage = h('div', { class: 'collage-row' });
     const collage = h('div', null, R.collage,
       h('button', { type: 'button', class: 'btn collage-edit', title: 'Cambiar las fotos de arriba', onclick: editBanner }, '✎ Fotos'));
@@ -203,10 +208,10 @@
         h('span', null, 'Hola de nuevo, ', R.greet, ' · ', h('a', { href: '#', onclick: e => { e.preventDefault(); logout(); } }, 'Cerrar sesión')),
         h('div', { class: 'inline-form' }, R.clock, themeBtn())));
 
-    const TABS = [['posts', 'POSTS'], ['event', 'PRÓXIMO EVENTO'], ['art', 'ARTE'], ['living', 'LIVING'], ['notifs', 'NOTIFICACIONES']];
+    const TABS = [['posts', 'POSTS'], ['event', 'PRÓXIMO EVENTO'], ['art', 'ARTE'], ['living', 'LIVING'], ['profile', 'PERFIL'], ['notifs', 'NOTIFICACIONES']];
     R.tabBtns = {};
     R.badge = h('span', { class: 'badge hidden' });
-    const nav = h('nav', { class: 'nav' }, TABS.map(([id, label]) => (R.tabBtns[id] = h('button', { type: 'button', onclick: () => goTab(id) }, label, id === 'notifs' ? R.badge : null))));
+    const nav = h('nav', { class: 'nav' }, TABS.map(([id, label]) => (R.tabBtns[id] = h('button', { type: 'button', onclick: () => (id === 'profile' ? openProfile(S.me.id) : goTab(id)) }, label, id === 'notifs' ? R.badge : null))));
     R.tickerText = h('span');
     const ticker = h('div', { class: 'ticker-wrap' },
       h('div', { class: 'ticker' }, R.tickerText),
@@ -266,7 +271,7 @@
     R.secBody = h('div', { class: 'section-body' });
     R.lightbox = h('div', { class: 'lightbox hidden', onclick: () => R.lightbox.classList.add('hidden') });
 
-    app.replaceChildren(R.wrap = h('div', { class: 'wrap' }, header, nav, ticker, h('div', { class: 'cols' }, left, R.liveBox, chat, right), (R.section = h('section', { class: 'box section' }, R.secTitle, R.secBody))), R.lightbox);
+    app.replaceChildren(R.wrap = h('div', { class: 'wrap' }, header, nav, ticker, h('div', { class: 'cols' }, left, R.liveBox, chat, right), (R.pview = h('div', { class: 'pview' })), (R.section = h('section', { class: 'box section' }, R.secTitle, R.secBody))), R.lightbox);
     R.builtTab = null; R.chatRendered = false; R.editingNick = false;
     refreshAll();
     renderChat();
@@ -295,7 +300,7 @@
     R.chatCount.textContent = `${ids.length} conectados`;
     R.onlineList.replaceChildren(...ids.map(id => h('div', { class: 'row' },
       h('span', { class: 'dot' }), avatar(id, 18),
-      h('b', { class: 'ellip', style: { color: colorOf(id) } }, userOf(id).name),
+      h('b', { class: 'ellip go', style: { color: colorOf(id) }, title: 'Ver su perfil', onclick: () => openProfile(id) }, userOf(id).name),
       h('span', { class: 'tiny muted' }, id === S.me.id ? 'vos' : 'en línea'))));
   }
   function updateProfile() {
@@ -318,7 +323,8 @@
     } else {
       nickArea = h('div', { class: 'inline-form', style: { justifyContent: 'center' } },
         h('button', { class: 'btn', type: 'button', onclick: () => { R.editingNick = true; updateProfile(); } }, 'Cambiar apodo'),
-        h('label', { class: 'btn' }, hasPic ? 'Cambiar foto' : 'Subir foto', picInput()));
+        h('label', { class: 'btn' }, hasPic ? 'Cambiar foto' : 'Subir foto', picInput()),
+        h('button', { class: 'btn', type: 'button', onclick: () => openProfile(S.me.id) }, 'Ver mi perfil'));
     }
     R.profile.replaceChildren(
       h('label', { class: 'pic', title: 'Cambiar foto' }, avatar(S.me.id, 84), picInput()),
@@ -670,7 +676,21 @@
     const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
     (id === 'living' ? R.liveBox : R.section).scrollIntoView({ block: 'start', behavior: still ? 'auto' : 'smooth' });
   }
-  function setTab(id) { S.tab = id; if (id !== 'notifs') R.fresh = null; updateBadge(); updateSection(); }
+  function setTab(id) {
+    if (S.tab === 'profile' && R.dirty && !confirm('¿Salir sin guardar los cambios de tu perfil?')) return false;
+    if (id !== 'profile') { S.pid = null; S.prof = null; setHash(''); }
+    R.draft = null; R.dirty = false;
+    S.tab = id; if (id !== 'notifs') R.fresh = null; updateBadge(); updateSection();
+    return true;
+  }
+  // re-drawing a list throws away its comment boxes; carry over what was typed and the focus
+  function swapKeeping(el, nodes) {
+    const saved = {};
+    let focusKey = null;
+    el.querySelectorAll('input[data-k]').forEach(i => { if (i.value) saved[i.dataset.k] = i.value; if (i === document.activeElement) focusKey = i.dataset.k; });
+    el.replaceChildren(...nodes);
+    el.querySelectorAll('input[data-k]').forEach(i => { if (saved[i.dataset.k]) i.value = saved[i.dataset.k]; if (focusKey === i.dataset.k) i.focus(); });
+  }
   function updateSection() {
     for (const id in R.tabBtns) R.tabBtns[id].classList.toggle('on', S.tab === id);
     const living = S.tab === 'living';
@@ -678,8 +698,12 @@
       R.wrap.classList.toggle('living', living);
       if (nearBottom()) stick(); // the chat changes size; stay on the latest message
     }
+    const prof = S.tab === 'profile';
+    R.wrap.classList.toggle('profiling', prof);
+    if (!prof) { clearTheme(); R.pf = null; R.pview.replaceChildren(); }
     if (living) return showLive();
     hideLive();
+    if (prof) return;
     if (R.builtTab !== S.tab) {
       R.builtTab = S.tab;
       R.secTitle.textContent = TITLES[S.tab];
@@ -687,11 +711,7 @@
       const top = S.tab === 'posts' ? [postComposer()] : S.tab === 'event' ? eventControls() : S.tab === 'art' ? artControls() : [];
       R.secBody.replaceChildren(...top, R.secList);
     }
-    const saved = {};
-    let focusKey = null;
-    R.secList.querySelectorAll('input[data-k]').forEach(i => { if (i.value) saved[i.dataset.k] = i.value; if (i === document.activeElement) focusKey = i.dataset.k; });
-    R.secList.replaceChildren(...(S.tab === 'posts' ? postsList() : S.tab === 'event' ? eventsList() : S.tab === 'art' ? artList() : notifsList()));
-    R.secList.querySelectorAll('input[data-k]').forEach(i => { if (saved[i.dataset.k]) i.value = saved[i.dataset.k]; if (focusKey === i.dataset.k) i.focus(); });
+    swapKeeping(R.secList, S.tab === 'posts' ? postsList() : S.tab === 'event' ? eventsList() : S.tab === 'art' ? artList() : notifsList());
   }
 
   function postComposer() {
@@ -736,12 +756,16 @@
     if (!S.posts.length) return [h('div', { class: 'empty' }, h('b', null, 'Todavía no hay posts.'), ' Sé el primero en compartir algo.')];
     const counts = {};
     S.posts.forEach(p => { counts[p.uid] = (counts[p.uid] || 0) + 1; });
-    return S.posts.map(p => {
+    return S.posts.map(p => postEl(p, counts[p.uid], 'c'));
+  }
+  // one post with its comments; `key` keeps the comment boxes of the feed and of a profile apart
+  function postEl(p, count, key) {
+    {
       const u = userOf(p.uid);
-      const cin = h('input', { class: 'input', maxLength: 1000, placeholder: 'Escribí un comentario', autocomplete: 'off', 'data-k': 'c' + p.id });
+      const cin = h('input', { class: 'input', maxLength: 1000, placeholder: 'Escribí un comentario', autocomplete: 'off', 'data-k': key + p.id });
       withMentions(cin);
       return h('article', { class: 'post', 'data-post': p.id },
-        h('div', { class: 'post-author' }, h('b', { style: { fontSize: '13px', color: colorOf(p.uid) } }, u.name), avatar(p.uid, 64), h('span', { class: 'tiny muted' }, 'Posts: ' + counts[p.uid])),
+        h('div', { class: 'post-author go', title: 'Ver su perfil', onclick: () => openProfile(p.uid) }, h('b', { style: { fontSize: '13px', color: colorOf(p.uid) } }, u.name), avatar(p.uid, 64), h('span', { class: 'tiny muted' }, 'Posts: ' + count)),
         h('div', { class: 'post-main' },
           h('div', { class: 'post-meta' }, 'Publicado ' + ago(p.ts)),
           h('div', { class: 'post-body' },
@@ -751,7 +775,7 @@
               : h('img', { src: up(f), alt: '', loading: 'lazy', onclick: () => openLightbox(up(f), `${u.name} · ${ago(p.ts)}`) })))) : null),
           yeahBar(p),
           h('div', { class: 'comments' },
-            p.comments.map(c => h('div', { class: 'comment' }, h('b', { style: { color: colorOf(c.uid) } }, userOf(c.uid).name + ':'), h('span', { class: 'comment-text' }, rich(c.text)), h('span', { class: 'when' }, ago(c.ts)))),
+            p.comments.map(c => h('div', { class: 'comment' }, h('b', { class: 'go', style: { color: colorOf(c.uid) }, onclick: () => openProfile(c.uid) }, userOf(c.uid).name + ':'), h('span', { class: 'comment-text' }, rich(c.text)), h('span', { class: 'when' }, ago(c.ts)))),
             h('form', {
               class: 'reply',
               onsubmit: async e => {
@@ -761,7 +785,7 @@
                 try { await api(`/api/posts/${p.id}/comments`, { text: t }); cin.value = ''; } catch (x) { toast(errMsg(x)); }
               }
             }, cin, emojiBtn(cin), h('button', { class: 'btn', type: 'submit' }, 'Responder')))));
-    });
+    }
   }
 
   // "Yeah..." reaction: a little head with a plus, like a thumbs-up
@@ -791,7 +815,7 @@
       btn,
       n ? h('div', { class: 'yeah-who' },
         h('div', { class: 'small' }, n === 1 ? '1 persona le dio un Yeah.' : `${n} personas le dieron un Yeah.`),
-        h('div', { class: 'yeah-avs' }, p.yeahs.map(id => h('span', { title: userOf(id).name }, avatar(id, 36))))) : null);
+        h('div', { class: 'yeah-avs' }, p.yeahs.map(id => h('span', { class: 'go', title: userOf(id).name, onclick: () => openProfile(id) }, avatar(id, 36))))) : null);
   }
 
   function eventControls() {
@@ -902,7 +926,7 @@
     if (m.sys) return h('div', { class: 'msg sys', 'data-chat': m.id }, `[${clock(m.ts)}] *** ${m.text}`);
     const body = h('span', { class: 'msg-text' }, rich(m.text));
     if (up(m.gif)) body.append(h('img', { class: 'msg-gif', src: up(m.gif), alt: 'Imagen', loading: 'lazy', onclick: () => openLightbox(up(m.gif), `${userOf(m.uid).name} · ${clock(m.ts)}`), onload: () => { if (nearBottom(300)) stick(); } }));
-    return h('div', { class: 'msg' + (m.uid !== S.me.id && mentionsMe(m.text) ? ' tagged' : ''), 'data-chat': m.id }, h('span', { class: 'time' }, `[${clock(m.ts)}]`), avatar(m.uid, 22), h('b', { class: 'nick', style: { color: colorOf(m.uid) } }, userOf(m.uid).name + ':'), body);
+    return h('div', { class: 'msg' + (m.uid !== S.me.id && mentionsMe(m.text) ? ' tagged' : ''), 'data-chat': m.id }, h('span', { class: 'time' }, `[${clock(m.ts)}]`), avatar(m.uid, 22), h('b', { class: 'nick go', style: { color: colorOf(m.uid) }, title: 'Ver su perfil', onclick: () => openProfile(m.uid) }, userOf(m.uid).name + ':'), body);
   }
   const nearBottom = (gap = 80) => R.log.scrollHeight - R.log.scrollTop - R.log.clientHeight < gap;
   function stick() { R.log.scrollTop = R.log.scrollHeight; setTimeout(() => { R.log.scrollTop = R.log.scrollHeight; }, 400); }
@@ -990,7 +1014,7 @@
   }
   const insert = s => insertAt(R.chatInput, s);
   // comment boxes get rebuilt when data changes; find the current copy of the same box
-  const live = el => (el.isConnected ? el : (el.dataset.k && R.secList && R.secList.querySelector(`[data-k="${el.dataset.k}"]`)) || null);
+  const live = el => (el.isConnected ? el : (el.dataset.k && document.querySelector(`[data-k="${el.dataset.k}"]`)) || null);
 
   // ---------- @mention autocomplete ----------
   function floating(cls) {
@@ -1133,7 +1157,7 @@
       const el = R.log.querySelector(`[data-chat="${n.chat}"]`);
       return el ? flash(el) : toast('Ese mensaje ya es muy viejo para mostrarlo en el chat.');
     }
-    setTab('posts');
+    if (!setTab('posts')) return;
     const el = R.secList.querySelector(`[data-post="${n.post}"]`);
     return el ? flash(el) : toast('Ese post ya no está.');
   }
@@ -1276,6 +1300,344 @@
     if (st === 1 && S.live.playing && Math.abs(cur - liveTarget()) > 3) liveSync(); // fell behind or ahead
   }
 
+  // ---------- profiles: everyone decorates their own page ----------
+  // While you look at someone's profile, the whole site wears their colours, fonts and background.
+  const FONTS = {
+    default: ['Clásica', "Verdana, Tahoma, Geneva, sans-serif"],
+    georgia: ['Georgia', "Georgia, 'Times New Roman', serif"],
+    courier: ['Courier', "'Courier New', Courier, monospace"],
+    trebuchet: ['Trebuchet', "'Trebuchet MS', Verdana, sans-serif"],
+    'comic-neue': ['Comic Neue', "'Comic Neue', 'Comic Sans MS', cursive"],
+    'special-elite': ['Special Elite', "'Special Elite', 'Courier New', monospace"],
+    pacifico: ['Pacifico', "'Pacifico', cursive"],
+    lobster: ['Lobster', "'Lobster', cursive"],
+    bangers: ['Bangers', "'Bangers', Impact, sans-serif"],
+    creepster: ['Creepster', "'Creepster', fantasy"],
+    'permanent-marker': ['Permanent Marker', "'Permanent Marker', cursive"],
+    'press-start-2p': ['Press Start', "'Press Start 2P', monospace"],
+    vt323: ['VT323', "'VT323', monospace"],
+    orbitron: ['Orbitron', "'Orbitron', sans-serif"],
+    unifrakturcook: ['Unifraktur', "'UnifrakturCook', serif"],
+    cinzel: ['Cinzel', "'Cinzel', Georgia, serif"]
+  };
+  const THEME_DEF = { colors: null, font: 'default', hfont: 'default', bgMode: 'cover', glass: 0, avatar: 'square', border: 'solid', radius: 0, bannerH: 'medium', bannerY: 50, nameFx: 'none' };
+  const COLOR_LABELS = [['bg', 'Fondo de la página'], ['panel', 'Cajas'], ['text', 'Texto'], ['accent', 'Links y detalles'], ['bar', 'Barras de título']];
+  const col = (bg, panel, text, accent, bar) => ({ bg, panel, text, accent, bar });
+  const PRESETS = [
+    ['Clásico', {}],
+    ['Medianoche', { colors: col('#0b1020', '#151c33', '#dfe6ff', '#7aa2ff', '#2b3f7a'), hfont: 'orbitron' }],
+    ['Chicle', { colors: col('#ffc1e3', '#fff0f8', '#5a1846', '#d81b7f', '#ff5fb0'), font: 'comic-neue', hfont: 'pacifico', radius: 12, avatar: 'round' }],
+    ['Matrix', { colors: col('#000000', '#03160a', '#39ff6a', '#b6ff00', '#0b5a1c'), font: 'vt323', hfont: 'press-start-2p', nameFx: 'glow' }],
+    ['Vaporwave', { colors: col('#2b1055', '#3a1c71', '#ffd6ff', '#00f0ff', '#ff5fa2'), hfont: 'bangers', nameFx: 'rainbow', radius: 6 }],
+    ['Terror', { colors: col('#0d0000', '#1a0505', '#e8d5d5', '#ff3b3b', '#5c0a0a'), hfont: 'creepster', nameFx: 'shadow' }],
+    ['Máquina de escribir', { colors: col('#d9d0bb', '#fbf7ec', '#2a2520', '#8a2f12', '#4a4038'), font: 'special-elite', hfont: 'special-elite', border: 'dashed' }],
+    ['Medieval', { colors: col('#2a2118', '#e9dcc0', '#2b1d0e', '#7a1f1f', '#5a3c1f'), font: 'georgia', hfont: 'unifrakturcook', border: 'double' }]
+  ];
+  const THEME_VARS = ['--page', '--panel', '--row', '--row2', '--border', '--bar1', '--bar2', '--bartext', '--text', '--muted', '--link', '--accent', '--tab', '--tab-on', '--btn', '--input', '--ticker', '--tickertext', '--font', '--hfont', '--radius', '--bstyle', '--bwidth', '--bgimg', '--bgsize', '--bgrep', '--n1', '--n2', '--n3', '--n4', '--n5', '--n6', '--sys'];
+  const rootVar = k => getComputedStyle(document.documentElement).getPropertyValue(k).trim();
+  // black or white, whichever reads better on that colour
+  function contrast(hex) {
+    const n = parseInt(hex.slice(1), 16);
+    return 0.299 * (n >> 16) + 0.587 * (n >> 8 & 255) + 0.114 * (n & 255) > 150 ? '#1a1a1a' : '#ffffff';
+  }
+  function clearTheme() {
+    if (!R.themed) return;
+    const b = document.body;
+    THEME_VARS.forEach(v => b.style.removeProperty(v));
+    b.style.backgroundImage = b.style.backgroundSize = b.style.backgroundRepeat = '';
+    b.classList.remove('themed', 'bgfix');
+    R.themed = false;
+  }
+  function wearTheme(t, bg) {
+    clearTheme();
+    R.themed = true;
+    const b = document.body, set = (k, v) => b.style.setProperty(k, v);
+    b.classList.add('themed');
+    const mix = (a, pct, c) => `color-mix(in srgb, ${a} ${pct}%, ${c})`;
+    const glass = v => (t.glass ? mix(v, 100 - t.glass, 'transparent') : v); // see-through boxes, so the background shows
+    const c = t.colors;
+    if (c) {
+      // the five chosen colours; every other shade is worked out from them
+      set('--page', c.bg); set('--text', c.text); set('--link', c.accent); set('--accent', mix(c.accent, 70, c.text));
+      set('--panel', glass(c.panel)); set('--row', glass(mix(c.panel, 90, c.text))); set('--row2', glass(mix(c.panel, 96, c.text)));
+      set('--input', mix(c.panel, 94, c.bg));
+      set('--border', mix(c.text, 45, c.panel)); set('--muted', mix(c.text, 65, c.panel));
+      set('--bar1', c.bar); set('--bar2', mix(c.bar, 70, '#000')); set('--bartext', contrast(c.bar));
+      const face = `linear-gradient(${mix(c.panel, 92, '#fff')}, ${mix(c.panel, 86, c.text)})`;
+      set('--tab', face); set('--btn', face);
+      set('--tab-on', `linear-gradient(${mix(c.panel, 80, c.accent)}, ${mix(c.panel, 62, c.accent)})`);
+      set('--ticker', mix(c.panel, 78, c.accent)); set('--tickertext', c.text);
+      // people's name colours, pulled towards the text colour so they stay readable on any background
+      for (const k of ['--n1', '--n2', '--n3', '--n4', '--n5', '--n6', '--sys']) set(k, mix(rootVar(k), 45, c.text));
+    } else if (t.glass) {
+      for (const k of ['--panel', '--row', '--row2']) set(k, glass(rootVar(k)));
+    }
+    if (t.font !== 'default' && FONTS[t.font]) set('--font', FONTS[t.font][1]);
+    if (t.hfont !== 'default' && FONTS[t.hfont]) set('--hfont', FONTS[t.hfont][1]);
+    set('--bstyle', t.border); set('--bwidth', t.border === 'double' ? '3px' : '1px'); set('--radius', t.radius + 'px');
+    const src = up(bg);
+    if (!src) return;
+    if (t.bgMode === 'tile') { // repeats and scrolls with the page
+      b.style.backgroundImage = `url("${src}")`; b.style.backgroundRepeat = 'repeat'; b.style.backgroundSize = 'auto';
+    } else { // stays still behind the page
+      set('--bgimg', `url("${src}")`);
+      set('--bgsize', t.bgMode === 'cover' ? 'cover' : 'auto');
+      set('--bgrep', t.bgMode === 'cover' ? 'no-repeat' : 'repeat');
+      b.classList.add('bgfix');
+    }
+  }
+
+  // the address bar remembers which profile is open, so links and the back button work
+  function setHash(v) {
+    const want = v ? '#' + v : '';
+    if (location.hash !== want) history.pushState(null, '', want || location.pathname + location.search);
+  }
+  function routeHash() {
+    if (!S.me || !R.wrap || !R.wrap.isConnected) return;
+    const m = /^#perfil\/(\d{1,12})$/.exec(location.hash);
+    if (m && S.users[m[1]]) openProfile(Number(m[1]));
+    else if (S.tab === 'profile') setTab('posts');
+  }
+  window.addEventListener('popstate', routeHash);
+
+  function scrollToProfile() {
+    const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    R.pview.scrollIntoView({ block: 'start', behavior: still ? 'auto' : 'smooth' });
+  }
+  async function openProfile(uid) {
+    uid = Number(uid);
+    if (!S.users[uid]) return;
+    if (S.tab === 'profile' && S.pid === uid) return scrollToProfile();
+    if (!setTab('profile')) return;
+    S.pid = uid; S.prof = null; R.pf = null;
+    setHash('perfil/' + uid);
+    drawProfile();
+    scrollToProfile();
+    await loadProfile();
+  }
+  async function loadProfile() {
+    const id = S.pid;
+    if (!id) return;
+    let p;
+    try { p = await api('/api/profile/' + id); }
+    catch (e) {
+      if (S.pid === id && !S.prof && R.pf) R.pf.posts.replaceChildren(h('div', { class: 'empty' }, 'No se pudo cargar este perfil. Probá de nuevo en un rato.'));
+      return;
+    }
+    if (S.pid !== id || S.tab !== 'profile') return;
+    S.prof = p;
+    drawProfile();
+  }
+  // the frame is built once per visit; after that only its contents are redrawn
+  function drawProfile() {
+    const id = S.pid, mine = id === S.me.id;
+    if (!R.pf || R.pf.id !== id) {
+      const f = R.pf = { id };
+      f.people = h('div', { class: 'box pf-people' });
+      f.banner = h('div', { class: 'pf-banner' });
+      f.head = h('div', { class: 'pf-head' });
+      f.editSlot = h('div');
+      f.bio = h('div', { class: 'pf-bio' });
+      f.stats = h('div', { class: 'stats' });
+      f.art = h('div', { class: 'side-pad' });
+      f.postsTitle = h('span', { class: 'pf-title' });
+      f.posts = h('div', { class: 'list' });
+      R.pview.replaceChildren(
+        f.people,
+        h('section', { class: 'box' }, f.banner, f.head),
+        f.editSlot,
+        h('div', { class: 'pf-cols' },
+          h('aside', { class: 'pf-side' }, box('Sobre mí', f.bio), box('Números', f.stats), box('Arte', f.art)),
+          h('section', { class: 'box pf-main' }, h('div', { class: 'bar' }, f.postsTitle),
+            h('div', { class: 'section-body' }, mine ? postComposer() : null, f.posts))));
+    }
+    paintProfile();
+    paintProfilePosts();
+  }
+  function paintProfile() {
+    const f = R.pf, id = S.pid;
+    if (!f || S.tab !== 'profile') return;
+    const u = userOf(id), p = S.prof, d = R.draft, mine = id === S.me.id;
+    const t = { ...THEME_DEF, ...(d ? d.theme : p ? p.theme : {}) };
+    const tagline = d ? d.tagline : p ? p.tagline : '';
+    const bio = d ? d.bio : p ? p.bio : '';
+    wearTheme(t, p && p.bg);
+
+    const everyone = Object.values(S.users).sort((a, b) => a.name.localeCompare(b.name, LOC));
+    f.people.replaceChildren(h('b', { class: 'small' }, 'Perfiles:'), ...everyone.map(x =>
+      h('button', { type: 'button', class: x.id === id ? 'on' : '', title: x.name, onclick: () => openProfile(x.id) }, avatar(x.id, 28))));
+
+    f.banner.className = 'pf-banner ' + t.bannerH;
+    if (p && up(p.banner)) {
+      let img = f.banner.firstChild;
+      if (!img || img.dataset.f !== p.banner) { // same picture: keep it, so it doesn't blink
+        img = h('img', { src: up(p.banner), alt: '' });
+        img.dataset.f = p.banner;
+        f.banner.replaceChildren(img);
+      }
+      img.style.objectPosition = `50% ${t.bannerY}%`;
+    } else f.banner.replaceChildren();
+
+    const on = mine || S.online.includes(id);
+    const editBtn = mine && p && !d ? h('button', { class: 'btn', type: 'button', onclick: editProfile }, '✎ Editar mi perfil') : '';
+    f.head.replaceChildren(
+      h('div', { class: 'pf-av ' + t.avatar }, avatar(id, 112)),
+      h('div', { class: 'pf-id' },
+        h('div', { class: 'pf-name fx-' + t.nameFx, style: { color: t.colors ? 'var(--link)' : colorOf(id) } }, u.name),
+        tagline ? h('div', { class: 'pf-tagline' }, rich(tagline)) : null,
+        h('div', { class: 'small muted inline-form' },
+          on ? [h('span', { class: 'dot' }), 'En línea'] : 'Desconectado',
+          p ? ' · En el grupo desde ' + new Date(p.joined).toLocaleDateString(LOC, { month: 'long', year: 'numeric', timeZone: TZ }) : null)),
+      editBtn);
+
+    f.bio.replaceChildren(...(bio ? rich(bio) : [h('span', { class: 'muted' }, mine ? 'Todavía no escribiste nada sobre vos. Tocá «Editar mi perfil».' : 'Todavía no escribió nada.')]));
+    const stat = (k, v) => h('div', null, h('span', { class: 'muted' }, k), h('b', null, String(v)));
+    const n = p ? p.stats : {};
+    f.stats.replaceChildren(stat('Mensajes en el chat:', n.messages ?? '…'), stat('Posts:', n.posts ?? '…'), stat('Arte:', n.art ?? '…'), stat('Yeahs recibidos:', n.yeahs ?? '…'));
+    const art = p ? p.art.filter(a => up(a.file)) : [];
+    f.art.replaceChildren(art.length
+      ? h('div', { class: 'grid3' }, art.map(a => h('button', { class: 'thumb', type: 'button', onclick: () => openLightbox(up(a.file), `${u.name} · ${ago(a.ts)}`) }, h('img', { src: up(a.file), alt: '', loading: 'lazy' }))))
+      : h('span', { class: 'muted' }, p ? 'Todavía no subió arte.' : '…'));
+  }
+  function paintProfilePosts() {
+    const f = R.pf, p = S.prof;
+    if (!f) return;
+    const u = userOf(S.pid), mine = S.pid === S.me.id;
+    f.postsTitle.textContent = mine ? 'Mis posts' : 'Posts de ' + u.name;
+    swapKeeping(f.posts, !p ? [h('div', { class: 'empty' }, 'Cargando…')]
+      : p.posts.length ? p.posts.map(x => postEl(x, p.stats.posts, 'pc'))
+      : [h('div', { class: 'empty' }, mine ? 'Todavía no publicaste nada. Lo que publiques aparece acá y en el muro.' : `${u.name} todavía no publicó nada.`)]);
+  }
+
+  // --- the editor: every change shows right away on the page, and nothing is saved until "Guardar" ---
+  function editProfile() {
+    const p = S.prof;
+    if (!p || S.pid !== S.me.id) return;
+    R.draft = { tagline: p.tagline, bio: p.bio, theme: { ...THEME_DEF, ...p.theme, colors: p.theme.colors ? { ...p.theme.colors } : null } };
+    R.dirty = false;
+    drawEditor();
+    paintProfile();
+  }
+  let paintQueued = false;
+  function touch() {
+    R.dirty = true;
+    if (paintQueued) return;
+    paintQueued = true;
+    requestAnimationFrame(() => { paintQueued = false; paintProfile(); });
+  }
+  function closeEditor() {
+    R.draft = null; R.dirty = false;
+    if (R.pf) R.pf.editSlot.replaceChildren();
+    paintProfile();
+  }
+  function drawEditor() {
+    const d = R.draft, f = R.pf, p = S.prof;
+    if (!d || !f || !p) return;
+    const t = d.theme;
+    const redraw = () => { drawEditor(); touch(); };
+    const group = (title, ...kids) => h('fieldset', null, h('legend', null, title), ...kids);
+    const sel = (key, opts) => {
+      const s = h('select', { class: 'input', onchange: () => { t[key] = s.value; touch(); } }, opts.map(([v, l]) => h('option', { value: v }, l)));
+      s.value = t[key];
+      return s;
+    };
+    const range = (key, min, max) => h('input', { type: 'range', min: String(min), max: String(max), value: String(t[key]), oninput: e => { t[key] = Number(e.target.value); touch(); } });
+    const fontRow = key => h('div', { class: 'pf-fonts' }, Object.keys(FONTS).map(k =>
+      h('button', { type: 'button', class: t[key] === k ? 'on' : '', 'aria-pressed': String(t[key] === k), style: { fontFamily: FONTS[k][1] }, onclick: () => { t[key] = k; redraw(); } }, FONTS[k][0])));
+    // banner and background are uploaded straight away (like the profile photo)
+    const picture = (kind, label, max) => {
+      const busy = h('span', { class: 'small muted' });
+      const pick = h('input', {
+        type: 'file', accept: 'image/jpeg,image/png,image/gif,image/webp',
+        onchange: async e => {
+          const file = e.target.files[0];
+          e.target.value = '';
+          if (!file) return;
+          busy.textContent = 'Subiendo…';
+          try {
+            const fd = new FormData();
+            fd.append('file', await fitImage(file, max), kind);
+            await api('/api/profile/' + kind, fd, true);
+            await loadProfile();
+          } catch (x) { toast(errMsg(x)); }
+          if (R.draft) drawEditor();
+        }
+      });
+      const has = !!up(S.prof[kind]);
+      return h('div', { class: 'inline-form' },
+        h('label', { class: 'btn' }, has ? 'Cambiar ' + label : 'Subir ' + label, pick),
+        has ? h('button', {
+          type: 'button', class: 'btn',
+          onclick: async () => {
+            try { await api(`/api/profile/${kind}/delete`, {}); await loadProfile(); } catch (x) { toast(errMsg(x)); }
+            if (R.draft) drawEditor();
+          }
+        }, 'Quitar') : null,
+        busy);
+    };
+
+    const tagline = h('input', { class: 'input', maxLength: 80, placeholder: 'Una frase, tu estado, lo que quieras', value: d.tagline, oninput: e => { d.tagline = e.target.value; touch(); } });
+    const bio = h('textarea', { class: 'input', maxLength: 1000, rows: 5, placeholder: 'Contá algo sobre vos. Podés usar emotes con :nombre:', oninput: e => { d.bio = e.target.value; touch(); } });
+    bio.value = d.bio;
+
+    const own = !!t.colors;
+    const colors = h('div', { class: 'pf-colors' }, own ? COLOR_LABELS.map(([k, label]) =>
+      h('label', null, h('input', { type: 'color', value: t.colors[k], oninput: e => { t.colors[k] = e.target.value; touch(); } }), label)) : null);
+    const ownBox = h('input', {
+      type: 'checkbox', checked: own,
+      onchange: e => {
+        // start from the colours on screen right now, so nothing jumps
+        t.colors = e.target.checked ? col(rootVar('--page'), rootVar('--panel'), rootVar('--text'), rootVar('--link'), rootVar('--bar1')) : null;
+        redraw();
+      }
+    });
+
+    const save = h('button', { class: 'btn', type: 'submit' }, 'Guardar');
+    const form = h('form', {
+      class: 'pf-edit',
+      onsubmit: async e => {
+        e.preventDefault();
+        save.disabled = true;
+        try {
+          await api('/api/profile', { tagline: d.tagline, bio: d.bio, theme: t });
+          R.draft = null; R.dirty = false;
+          f.editSlot.replaceChildren();
+          await loadProfile();
+          paintProfile();
+        } catch (x) { toast(errMsg(x)); save.disabled = false; }
+      }
+    },
+      group('Temas listos (después podés cambiarles lo que quieras)', h('div', { class: 'inline-form' }, PRESETS.map(([name, preset]) =>
+        h('button', {
+          type: 'button', class: 'btn',
+          onclick: () => { d.theme = { ...THEME_DEF, bgMode: t.bgMode, bannerH: t.bannerH, bannerY: t.bannerY, glass: t.glass, ...preset, colors: preset.colors ? { ...preset.colors } : null }; redraw(); }
+        }, preset.colors ? [h('span', { class: 'pf-swatch', style: { background: preset.colors.bg } }), h('span', { class: 'pf-swatch', style: { background: preset.colors.accent } })] : null, name)))),
+      group('Sobre vos', field('Frase debajo de tu nombre:', tagline), field('Sobre mí:', bio)),
+      group('Banner (la foto ancha de arriba)', picture('banner', 'banner', 2000),
+        h('div', { class: 'inline-form' },
+          field('Alto:', sel('bannerH', [['short', 'Bajo'], ['medium', 'Medio'], ['tall', 'Alto']])),
+          field('Encuadre (qué parte de la foto se ve):', range('bannerY', 0, 100)))),
+      group('Fondo de la página', picture('bg', 'fondo', 2400),
+        h('div', { class: 'inline-form' },
+          field('Cómo se muestra:', sel('bgMode', [['cover', 'Llena la pantalla'], ['tile', 'Mosaico (se repite)'], ['tilefix', 'Mosaico fijo']])),
+          field('Transparencia de las cajas (para que se vea el fondo):', range('glass', 0, 70)))),
+      group('Colores', h('label', { class: 'inline-form small' }, ownBox, 'Usar mis propios colores'), colors),
+      group('Letra de los títulos y de tu nombre', fontRow('hfont')),
+      group('Letra del texto', fontRow('font')),
+      group('Detalles',
+        h('div', { class: 'inline-form' },
+          field('Efecto del nombre:', sel('nameFx', [['none', 'Ninguno'], ['shadow', 'Sombra'], ['glow', 'Neón'], ['rainbow', 'Arcoíris']])),
+          field('Foto de perfil:', sel('avatar', [['square', 'Cuadrada'], ['round', 'Redonda']])),
+          field('Bordes:', sel('border', [['solid', 'Lisos'], ['dashed', 'Rayitas'], ['dotted', 'Puntitos'], ['double', 'Dobles'], ['none', 'Sin bordes']])),
+          field('Esquinas redondeadas:', range('radius', 0, 16)))),
+      h('div', { class: 'inline-form pf-save' },
+        save,
+        h('button', { class: 'btn', type: 'button', onclick: () => { if (!R.dirty || confirm('¿Descartar los cambios?')) closeEditor(); } }, 'Cancelar'),
+        h('span', { class: 'spacer' }),
+        h('span', { class: 'small muted' }, 'Los cambios se ven al instante, pero solo se guardan con «Guardar».')));
+    f.editSlot.replaceChildren(h('section', { class: 'box pf-edit-box' }, h('div', { class: 'bar' }, 'Editar mi perfil'), form));
+  }
+
   // ---------- maintenance pop-up ----------
   let offTimer = null;
   function offline(on) {
@@ -1312,7 +1674,7 @@
       appendChat(m);
       if (!m.sys && m.uid === S.me.id) { S.stats.messages += 1; if (!R.editingNick) updateProfile(); }
     });
-    sock.on('presence', ids => { S.online = ids; updateOnline(); });
+    sock.on('presence', ids => { S.online = ids; updateOnline(); if (S.tab === 'profile') paintProfile(); });
     sock.on('typing', uid => { S.typing[uid] = Date.now(); renderTyping(); setTimeout(renderTyping, 3100); });
     sock.on('changed', reload);
     sock.on('live', st => { S.live = st; liveClock(st); if (S.tab === 'living') showLive(); });
