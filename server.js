@@ -58,8 +58,15 @@ CREATE TABLE IF NOT EXISTS banner (id INTEGER PRIMARY KEY, file TEXT NOT NULL, u
 CREATE TABLE IF NOT EXISTS music (id INTEGER PRIMARY KEY, vid TEXT NOT NULL, title TEXT NOT NULL, user_id INTEGER, ts INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS radio (id INTEGER PRIMARY KEY CHECK (id = 1), song INTEGER NOT NULL, vid TEXT NOT NULL, title TEXT NOT NULL, playing INTEGER NOT NULL, pos REAL NOT NULL, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS profiles (user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, banner TEXT, bg TEXT, tagline TEXT NOT NULL DEFAULT '', bio TEXT NOT NULL DEFAULT '', theme TEXT NOT NULL DEFAULT '{}', ts INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS wall (id INTEGER PRIMARY KEY, profile_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, text TEXT NOT NULL, ts INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS wall_profile ON wall(profile_id, id);
 CREATE TABLE IF NOT EXISTS yeahs (post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, ts INTEGER NOT NULL, PRIMARY KEY (post_id, user_id));
 `);
+
+// notifications can point at a guestbook entry (column added for databases made before the guestbook)
+if (!db.prepare("SELECT 1 FROM pragma_table_info('notifs') WHERE name = 'wall_id'").get()) {
+  db.exec('ALTER TABLE notifs ADD COLUMN wall_id INTEGER REFERENCES wall(id) ON DELETE CASCADE');
+}
 
 // the header photos start as the 8 built-in cats; after that people add and remove them
 const CAT_RE = /^cat-[1-8]\.png$/;
@@ -108,10 +115,10 @@ const q = {
   emojiGet: db.prepare('SELECT * FROM emojis WHERE name = ?'),
   emojiPut: db.prepare('INSERT OR REPLACE INTO emojis (name, file, user_id) VALUES (?, ?, ?)'),
   postAuthor: db.prepare('SELECT user_id FROM posts WHERE id = ?'),
-  addNotif: db.prepare('INSERT INTO notifs (user_id, actor_id, kind, post_id, comment_id, chat_id, ts) VALUES (?, ?, ?, ?, ?, ?, ?)'),
-  notifs: db.prepare(`SELECT n.id, n.actor_id AS actor, n.kind, n.post_id AS post, n.chat_id AS chat, n.ts, n.seen,
-    substr(COALESCE(c.text, ch.text, p.text, ''), 1, 200) AS text
-    FROM notifs n LEFT JOIN comments c ON c.id = n.comment_id LEFT JOIN chat ch ON ch.id = n.chat_id LEFT JOIN posts p ON p.id = n.post_id
+  addNotif: db.prepare('INSERT INTO notifs (user_id, actor_id, kind, post_id, comment_id, chat_id, wall_id, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'),
+  notifs: db.prepare(`SELECT n.id, n.actor_id AS actor, n.kind, n.post_id AS post, n.chat_id AS chat, n.wall_id AS wall, w.profile_id AS profile, n.ts, n.seen,
+    substr(COALESCE(c.text, ch.text, w.text, p.text, ''), 1, 200) AS text
+    FROM notifs n LEFT JOIN comments c ON c.id = n.comment_id LEFT JOIN chat ch ON ch.id = n.chat_id LEFT JOIN posts p ON p.id = n.post_id LEFT JOIN wall w ON w.id = n.wall_id
     WHERE n.user_id = ? ORDER BY n.id DESC LIMIT 100`),
   seenNotifs: db.prepare('UPDATE notifs SET seen = 1 WHERE user_id = ? AND seen = 0'),
   purgeNotifs: db.prepare('DELETE FROM notifs WHERE ts < ?'),
@@ -136,6 +143,10 @@ const q = {
   radioGet: db.prepare('SELECT song, vid, title, playing, pos, at FROM radio WHERE id = 1'),
   radioPut: db.prepare('INSERT OR REPLACE INTO radio (id, song, vid, title, playing, pos, at) VALUES (1, ?, ?, ?, ?, ?, ?)'),
   radioDel: db.prepare('DELETE FROM radio'),
+  wallBy: db.prepare('SELECT id, user_id AS uid, text, ts FROM wall WHERE profile_id = ? ORDER BY id DESC LIMIT 100'),
+  wallGet: db.prepare('SELECT profile_id, user_id FROM wall WHERE id = ?'),
+  wallAdd: db.prepare('INSERT INTO wall (profile_id, user_id, text, ts) VALUES (?, ?, ?, ?)'),
+  wallDel: db.prepare('DELETE FROM wall WHERE id = ?'),
   userFull: db.prepare('SELECT id, name, avatar, created FROM users WHERE id = ?'),
   profileGet: db.prepare('SELECT banner, bg, tagline, bio, theme FROM profiles WHERE user_id = ?'),
   profilePut: db.prepare(`INSERT INTO profiles (user_id, tagline, bio, theme, ts) VALUES (?, ?, ?, ?, ?)
@@ -588,8 +599,38 @@ app.get('/api/profile/:id', requireUser, (req, res) => {
     theme: theme || cleanTheme({}),
     stats: q.countsBy.get({ id }),
     posts: q.postsBy.all(id).map(x => ({ ...x, media: JSON.parse(x.media), comments: byPost[x.id] || [], yeahs: yeahsBy[x.id] || [] })),
-    art: q.artBy.all(id)
+    art: q.artBy.all(id),
+    wall: q.wallBy.all(id)
   });
+});
+
+// Guestbook: friends leave messages on each other's profile.
+// The writer or the profile's owner can delete a message.
+const wallTimes = new Map();
+app.post('/api/profile/:id/wall', requireUser, (req, res) => {
+  const id = toId(req.params.id);
+  const text = clean(req.body?.text, 500, 1);
+  if (!id || !text || !q.userFull.get(id)) return res.status(400).json({ error: 'bad_request' });
+  const t = now();
+  const recent = (wallTimes.get(req.user.id) || []).filter(x => t - x < 60e3);
+  if (recent.length >= 10) return res.status(429).json({ error: 'rate' });
+  wallTimes.set(req.user.id, [...recent, t]);
+  const wallId = Number(q.wallAdd.run(id, req.user.id, text, t).lastInsertRowid);
+  const tagged = mentionedIds(text, req.user.id);
+  notify(tagged, req.user.id, 'wall_mention', { wall: wallId }, t);
+  if (id !== req.user.id && !tagged.includes(id)) notify([id], req.user.id, 'wall', { wall: wallId }, t);
+  changed();
+  res.json({ ok: true });
+});
+app.post('/api/wall/:id/delete', requireUser, (req, res) => {
+  const id = toId(req.params.id);
+  const row = id && q.wallGet.get(id);
+  if (!row) return res.status(400).json({ error: 'bad_request' });
+  if (row.user_id !== req.user.id && row.profile_id !== req.user.id) return res.status(403).json({ error: 'forbidden' });
+  q.wallDel.run(id);
+  changed();
+  io.emit('notif'); // its notifications went with it
+  res.json({ ok: true });
 });
 
 app.post('/api/profile', requireUser, (req, res) => {
@@ -835,7 +876,7 @@ function radioWake() {
 function sys(text) { emitChat(Number(q.addChat.run(null, text, null, 1, now()).lastInsertRowid)); }
 function notify(ids, actorId, kind, ref, ts) {
   for (const id of ids) {
-    q.addNotif.run(id, actorId, kind, ref.post || null, ref.comment || null, ref.chat || null, ts);
+    q.addNotif.run(id, actorId, kind, ref.post || null, ref.comment || null, ref.chat || null, ref.wall || null, ts);
     io.to('u' + id).emit('notif');
   }
 }

@@ -294,7 +294,14 @@ textarea.input { min-height: 70px; resize: vertical; }
 .pf-tagline img.ce { display: inline-block; width: 22px; height: 22px; object-fit: contain; vertical-align: middle; }
 .pf-cols { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start; }
 .pf-side { flex: 1 1 250px; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
-.pf-main { flex: 999 1 460px; min-width: 0; }
+.pf-main { flex: 999 1 460px; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.pf-wall { max-height: 340px; overflow-y: auto; border-top: 1px dotted var(--border); }
+.pf-sign { display: flex; align-items: flex-start; gap: 8px; padding: 7px 10px; font-size: 12px; border-bottom: 1px dotted var(--border); }
+.pf-sign:last-child { border-bottom: 0; }
+.pf-sign:nth-child(even) { background: var(--row); }
+.pf-sign-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pf-sign-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.pf-sign-text img.ce { display: inline-block; width: 22px; height: 22px; object-fit: contain; vertical-align: middle; }
 .pf-bio { padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .pf-bio img.ce { display: inline-block; width: 40px; height: 40px; object-fit: contain; vertical-align: middle; }
 .pf-side .stats { border-top: 0; padding: 9px; font-size: 12px; }
