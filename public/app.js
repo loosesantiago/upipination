@@ -1122,7 +1122,9 @@
     post: 'te etiquetó en un post',
     comment_mention: 'te etiquetó en un comentario',
     comment: 'comentó tu post',
-    yeah: 'le dio un Yeah a tu post'
+    yeah: 'le dio un Yeah a tu post',
+    wall: 'firmó tu libro de visitas',
+    wall_mention: 'te etiquetó en un libro de visitas'
   };
   const unread = () => S.notifs.filter(n => !n.seen).length;
   function updateBadge() {
@@ -1152,7 +1154,13 @@
     el.scrollIntoView({ block: 'center', behavior: 'smooth' });
     el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
   }
-  function openNotif(n) {
+  async function openNotif(n) {
+    if (n.wall) {
+      if (!n.profile) return toast('Esa firma ya no está.');
+      await openProfile(n.profile);
+      const el = R.pview.querySelector(`[data-wall="${n.wall}"]`);
+      return el ? flash(el) : toast('Esa firma ya no está.');
+    }
     if (n.chat) {
       const el = R.log.querySelector(`[data-chat="${n.chat}"]`);
       return el ? flash(el) : toast('Ese mensaje ya es muy viejo para mostrarlo en el chat.');
@@ -1440,6 +1448,22 @@
       f.bio = h('div', { class: 'pf-bio' });
       f.stats = h('div', { class: 'stats' });
       f.art = h('div', { class: 'side-pad' });
+      f.wallTitle = h('span', { class: 'pf-title' });
+      f.wallCount = h('span', { class: 'small' });
+      f.wall = h('div', { class: 'pf-wall' });
+      const sign = withMentions(h('input', { class: 'input', maxLength: 500, autocomplete: 'off', 'data-k': 'w' + id, placeholder: mine ? 'Escribí algo en tu propio libro' : `Dejale un mensaje a ${userOf(id).name}` }));
+      const signBtn = h('button', { class: 'btn', type: 'submit' }, 'Firmar');
+      const signForm = h('form', {
+        class: 'reply',
+        onsubmit: async e => {
+          e.preventDefault();
+          const text = sign.value.trim();
+          if (!text) return;
+          signBtn.disabled = true;
+          try { await api(`/api/profile/${id}/wall`, { text }); sign.value = ''; } catch (x) { toast(errMsg(x)); }
+          signBtn.disabled = false;
+        }
+      }, sign, emojiBtn(sign), signBtn);
       f.postsTitle = h('span', { class: 'pf-title' });
       f.posts = h('div', { class: 'list' });
       R.pview.replaceChildren(
@@ -1448,8 +1472,10 @@
         f.editSlot,
         h('div', { class: 'pf-cols' },
           h('aside', { class: 'pf-side' }, box('Sobre mí', f.bio), box('Números', f.stats), box('Arte', f.art)),
-          h('section', { class: 'box pf-main' }, h('div', { class: 'bar' }, f.postsTitle),
-            h('div', { class: 'section-body' }, mine ? postComposer() : null, f.posts))));
+          h('div', { class: 'pf-main' },
+            h('section', { class: 'box' }, h('div', { class: 'bar' }, f.wallTitle, f.wallCount), signForm, f.wall),
+            h('section', { class: 'box' }, h('div', { class: 'bar' }, f.postsTitle),
+              h('div', { class: 'section-body' }, mine ? postComposer() : null, f.posts)))));
     }
     paintProfile();
     paintProfilePosts();
@@ -1504,6 +1530,23 @@
     if (!f) return;
     const u = userOf(S.pid), mine = S.pid === S.me.id;
     f.postsTitle.textContent = mine ? 'Mis posts' : 'Posts de ' + u.name;
+    // guestbook: newest first; the writer and the profile's owner can delete a message
+    const wall = p ? p.wall : [];
+    f.wallTitle.textContent = mine ? 'Mi libro de visitas' : 'Libro de visitas de ' + u.name;
+    f.wallCount.textContent = wall.length === 1 ? '1 firma' : wall.length ? `${wall.length} firmas` : '';
+    f.wall.replaceChildren(...(wall.length ? wall.map(w => h('div', { class: 'pf-sign', 'data-wall': w.id },
+      h('span', { class: 'go', title: 'Ver su perfil', onclick: () => openProfile(w.uid) }, avatar(w.uid, 32)),
+      h('div', { class: 'pf-sign-main' },
+        h('div', null, h('b', { class: 'go', style: { color: colorOf(w.uid) }, onclick: () => openProfile(w.uid) }, userOf(w.uid).name), h('span', { class: 'tiny muted' }, ' · ' + ago(w.ts))),
+        h('div', { class: 'pf-sign-text' }, rich(w.text))),
+      mine || w.uid === S.me.id ? h('button', {
+        type: 'button', class: 'btn music-x', title: 'Borrar esta firma',
+        onclick: async () => {
+          if (!confirm('¿Borrar esta firma?')) return;
+          try { await api(`/api/wall/${w.id}/delete`, {}); } catch (x) { toast(errMsg(x)); }
+        }
+      }, 'x') : null))
+      : [h('div', { class: 'pf-sign muted small' }, !p ? 'Cargando…' : mine ? 'Todavía nadie firmó tu libro de visitas.' : `Nadie firmó todavía. Sé el primero en dejarle un mensaje a ${u.name}.`)]));
     swapKeeping(f.posts, !p ? [h('div', { class: 'empty' }, 'Cargando…')]
       : p.posts.length ? p.posts.map(x => postEl(x, p.stats.posts, 'pc'))
       : [h('div', { class: 'empty' }, mine ? 'Todavía no publicaste nada. Lo que publiques aparece acá y en el muro.' : `${u.name} todavía no publicó nada.`)]);
