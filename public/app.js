@@ -1143,11 +1143,13 @@
   function notifsList() {
     if (!S.notifs.length) return [h('div', { class: 'empty' }, h('b', null, 'No tenés notificaciones.'), ' Cuando alguien te etiquete con @, comente tus posts o les dé un Yeah, aparece acá.')];
     return [h('div', { class: 'notifs' }, S.notifs.map(n => h('button', {
-      type: 'button', class: 'notif' + (R.fresh && R.fresh.has(n.id) ? ' new' : ''), onclick: () => openNotif(n)
+      type: 'button', class: 'notif' + (R.fresh && R.fresh.has(n.id) ? ' new' : ''),
+      // the name and photo go to that person's profile; the rest of the row opens what the notification is about
+      onclick: e => (e.target.closest('.go') ? openProfile(n.actor) : openNotif(n))
     },
-    avatar(n.actor, 32),
+    h('span', { class: 'go', title: 'Ver su perfil' }, avatar(n.actor, 32)),
     h('div', { class: 'notif-main' },
-      h('div', null, h('b', { style: { color: colorOf(n.actor) } }, userOf(n.actor).name), ' ', NOTIF_TEXT[n.kind] || 'te mencionó', h('span', { class: 'when' }, ' · ' + ago(n.ts))),
+      h('div', null, h('b', { class: 'go', style: { color: colorOf(n.actor) }, title: 'Ver su perfil' }, userOf(n.actor).name), ' ', NOTIF_TEXT[n.kind] || 'te mencionó', h('span', { class: 'when' }, ' · ' + ago(n.ts))),
       n.text ? h('div', { class: 'notif-text' }, rich(n.text)) : null))))];
   }
   function flash(el) {
