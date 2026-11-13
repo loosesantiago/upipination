@@ -37,7 +37,6 @@ for (const f of fs.readdirSync(TMP)) fs.rmSync(path.join(TMP, f), { force: true 
 const db = new Database(path.join(DATA, 'upipination.db'));
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
-const hadBanner = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'banner'").get();
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT UNIQUE NOT NULL, name TEXT NOT NULL, pw TEXT NOT NULL, avatar TEXT, created INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires INTEGER NOT NULL);
@@ -80,13 +79,6 @@ if (!db.prepare("SELECT 1 FROM pragma_table_info('profiles') WHERE name = 'sitew
 // birthday: 'MM-DD', or 'YYYY-MM-DD' when the person also gave the year (column added for older databases)
 if (!db.prepare("SELECT 1 FROM pragma_table_info('profiles') WHERE name = 'birthday'").get()) {
   db.exec('ALTER TABLE profiles ADD COLUMN birthday TEXT');
-}
-
-// the header photos start as the 8 built-in cats; after that people add and remove them
-const CAT_RE = /^cat-[1-8]\.png$/;
-if (!hadBanner) {
-  const add = db.prepare('INSERT INTO banner (file, user_id, ts) VALUES (?, NULL, ?)');
-  for (let i = 1; i <= 8; i++) add.run(`cat-${i}.png`, Date.now());
 }
 
 const q = {
@@ -139,11 +131,6 @@ const q = {
   liveGet: db.prepare('SELECT vid, playing, pos, at, by FROM living WHERE id = 1'),
   livePut: db.prepare('INSERT OR REPLACE INTO living (id, vid, playing, pos, at, by) VALUES (1, ?, ?, ?, ?, ?)'),
   liveDel: db.prepare('DELETE FROM living'),
-  banner: db.prepare('SELECT id, file, user_id AS uid FROM banner ORDER BY id'),
-  bannerCount: db.prepare('SELECT COUNT(*) AS n FROM banner'),
-  bannerGet: db.prepare('SELECT file FROM banner WHERE id = ?'),
-  bannerAdd: db.prepare('INSERT INTO banner (file, user_id, ts) VALUES (?, ?, ?)'),
-  bannerDel: db.prepare('DELETE FROM banner WHERE id = ?'),
   music: db.prepare('SELECT id, vid, title, user_id AS uid FROM music ORDER BY id'),
   musicCount: db.prepare('SELECT COUNT(*) AS n FROM music'),
   musicGet: db.prepare('SELECT title FROM music WHERE id = ?'),
@@ -472,7 +459,6 @@ app.get('/api/state', requireUser, (req, res) => {
     stats: { messages: q.myMessages.get(req.user.id).n },
     live: liveState(),
     ticker: tickerLines(),
-    banner: q.banner.all(),
     music: q.music.all(),
     radio: radioState(),
     fonts: q.fonts.all(),
@@ -499,29 +485,6 @@ app.post('/api/ticker', requireUser, (req, res) => {
     sys(`${req.user.name} cambió el banner`);
     changed();
   }
-  res.json({ ok: true });
-});
-
-// Header photo collage: anyone can add or remove photos.
-const BANNER_MAX = 60;
-app.post('/api/banner', requireUser, files('files', 6), (req, res) => {
-  const list = req.files || [];
-  if (!list.length) return res.status(400).json({ error: 'file' });
-  if (q.bannerCount.get().n + list.length > BANNER_MAX) { drop(list); return res.status(400).json({ error: 'banner_full' }); }
-  const t = now();
-  for (const f of keep(list, IMG, 8e6)) q.bannerAdd.run(f, req.user.id, t);
-  sys(`${req.user.name} agregó ${list.length === 1 ? 'una foto' : list.length + ' fotos'} al banner`);
-  changed();
-  res.json({ ok: true });
-});
-app.post('/api/banner/:id/delete', requireUser, (req, res) => {
-  const id = toId(req.params.id);
-  const row = id && q.bannerGet.get(id);
-  if (!row) return res.status(400).json({ error: 'bad_request' });
-  q.bannerDel.run(id);
-  if (FILE_RE.test(row.file)) fs.rmSync(path.join(UP, row.file), { force: true });
-  sys(`${req.user.name} sacó una foto del banner`);
-  changed();
   res.json({ ok: true });
 });
 
@@ -592,6 +555,7 @@ function cleanTheme(t) {
   const int = (v, lo, hi, d) => (Number.isInteger(v) && v >= lo && v <= hi ? v : d);
   const font = (v, d) => (fontOk(v) || (d === 'same' && v === 'same') ? v : d);
   const flag = (v, d) => (v === 0 || v === 1 ? v : d);
+  const hex = v => (typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v) ? v.toLowerCase() : null);
   let colors = null;
   if (t.colors != null) {
     if (typeof t.colors !== 'object') return null;
@@ -607,6 +571,7 @@ function cleanTheme(t) {
     font: font(t.font, 'default'), fsize: int(t.fsize, 80, 150, 100), lineh: int(t.lineh, 100, 220, 145),
     hfont: font(t.hfont, 'default'),
     nfont: font(t.nfont, 'same'),
+    tfont: font(t.tfont, 'same'),
     bfont: font(t.bfont, 'same'),
     bgMode: pick(t.bgMode, ['cover', 'tile', 'tilefix']),
     glass: int(t.glass, 0, 70, 0),
@@ -615,13 +580,21 @@ function cleanTheme(t) {
     radius: int(t.radius, 0, 16, 0),
     bannerH: pick(t.bannerH, ['medium', 'short', 'tall']),
     bannerY: int(t.bannerY, 0, 100, 50),
-    nameFx: pick(t.nameFx, ['none', 'shadow', 'glow', 'rainbow'])
+    nameFx: pick(t.nameFx, ['none', 'shadow', 'glow', 'rainbow']),
+    // the big title at the top of the page: its words, colours, sign, tilt, side and the room around it
+    ttext: oneLine(t.ttext ?? '', 30) || '',
+    tcolor: hex(t.tcolor), tback: hex(t.tback),
+    tplate: pick(t.tplate, ['plate', 'none']),
+    ttilt: int(t.ttilt, -10, 10, -2),
+    talign: pick(t.talign, ['center', 'left', 'right']),
+    tpad: int(t.tpad, 0, 120, 22),
+    tfx: pick(t.tfx, ['none', 'shadow', 'glow', 'rainbow'])
   };
-  // titles (h), the profile name (n) and the box bars and tabs (b): size, bold, italic, capitals, letter spacing
-  for (const k of ['h', 'n', 'b']) {
+  // titles (h), the profile name (n), the box bars and tabs (b) and the page title (t): size, bold, italic, capitals, letter spacing
+  for (const k of ['h', 'n', 'b', 't']) {
     out[k + 'size'] = int(t[k + 'size'], 60, 200, 100);
     out[k + 'bold'] = flag(t[k + 'bold'], 1);
-    out[k + 'ital'] = flag(t[k + 'ital'], 0);
+    out[k + 'ital'] = flag(t[k + 'ital'], k === 't' ? 1 : 0);
     out[k + 'upper'] = flag(t[k + 'upper'], 0);
     out[k + 'space'] = int(t[k + 'space'], 0, 8, 0);
   }

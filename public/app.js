@@ -66,7 +66,6 @@
     music_link: 'Ese link no parece de YouTube.',
     music_blocked: 'Ese video no existe o YouTube no deja reproducirlo fuera de su página.',
     music_full: 'La lista de música está llena (300 canciones). Sacá alguna primero.',
-    banner_full: 'El banner ya tiene 60 fotos. Sacá alguna antes de agregar más.',
     birthday: 'Esa fecha no existe. Revisá el día, el mes y el año.',
     wish_link: 'Ese link no parece válido. Copialo entero desde la página, por ejemplo https://tienda.com/producto.',
     wish_full: 'Tu lista ya tiene 50 deseos. Sacá alguno antes de agregar más.',
@@ -182,7 +181,7 @@
     S.me = st.me; S.users = {};
     st.users.forEach(u => { S.users[u.id] = u; });
     S.live = st.live; liveClock(st.live);
-    Object.assign(S, { chat: st.chat, posts: st.posts, events: st.events, art: st.art, emojis: st.emojis, notifs: st.notifs, stats: st.stats, online: st.online, ticker: st.ticker, banner: st.banner, music: st.music, radio: st.radio, fonts: st.fonts || [], skin: st.skin || null });
+    Object.assign(S, { chat: st.chat, posts: st.posts, events: st.events, art: st.art, emojis: st.emojis, notifs: st.notifs, stats: st.stats, online: st.online, ticker: st.ticker, music: st.music, radio: st.radio, fonts: st.fonts || [], skin: st.skin || null });
     buildMentionRe();
     syncFonts();
   }
@@ -200,17 +199,14 @@
     return h('span', { class: 'av av-i', style: { ...st, fontSize: Math.round(size * 0.45) + 'px' } }, ini(u.name));
   }
 
+  const SITE_NAME = 'Upipination';
   function buildApp() {
     if (S.tab === 'profile') S.tab = 'posts';
     S.pid = null; S.prof = null; R.pf = null; R.draft = null; R.dirty = false;
-    R.collage = h('div', { class: 'collage-row' });
-    const collage = h('div', null, R.collage,
-      h('button', { type: 'button', class: 'btn collage-edit', title: 'Cambiar las fotos de arriba', onclick: editBanner }, '✎ Fotos'));
     R.greet = h('b');
     R.clock = h('span', { class: 'muted' });
     const header = h('header', { class: 'box' },
-      h('div', { class: 'collage' }, collage, h('div', { class: 'title-plate' }, 'Upipination')),
-      (R.bannerPanel = h('div', { class: 'banner-panel hidden' })),
+      h('div', { class: 'site-title' }, (R.title = h('div', { class: 'title-plate' }, SITE_NAME))),
       h('div', { class: 'userbar' },
         h('span', null, 'Hola de nuevo, ', R.greet, ' · ', h('a', { href: '#', onclick: e => { e.preventDefault(); logout(); } }, 'Cerrar sesión')),
         h('div', { class: 'inline-form' }, R.clock, themeBtn())));
@@ -291,7 +287,7 @@
   function refreshAll() {
     updateMe(); updateOnline();
     if (!R.editingNick) updateProfile();
-    updateTicker(); updateCollage(); updateMusic(); updateSide(); updateBadge(); updateSection();
+    updateTicker(); updateMusic(); updateSide(); updateBadge(); updateSection();
     if (S.picker) updatePicker();
   }
   function updateMe() {
@@ -534,85 +530,6 @@
       if (st === 1 || st === 3) p.pauseVideo();
       if (Math.abs(cur - want) > 1) p.seekTo(want, true);
     }
-  }
-
-  // ---------- header photo collage ----------
-  // 12 tilted frames: [tilt, vertical offset, height]
-  const SLOTS = [[-5, 4, 200], [3, -8, 180], [-2, 12, 210], [4, -4, 185], [-3, 8, 205], [2, -10, 180], [-4, 6, 200], [5, -6, 190], [-2, 10, 195], [3, -6, 185], [-5, 2, 205], [4, -8, 190]];
-  // the built-in cats look best framed on their faces
-  const CAT_POS = { 1: '50% 35%', 2: '50% 45%', 3: '50% 55%', 4: '60% 50%', 5: '50% 35%', 6: '50% 30%', 7: '50% 55%', 8: '45% 60%' };
-  const bannerSrc = f => (/^cat-[1-8]\.png$/.test(f) ? '/img/' + f : up(f));
-  const bannerPos = f => CAT_POS[(f.match(/^cat-([1-8])\.png$/) || [])[1]] || '50% 40%';
-  const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
-  function setFrame(img, b) {
-    img.dataset.id = b.id;
-    img.src = bannerSrc(b.file);
-    img.style.objectPosition = bannerPos(b.file);
-  }
-  function updateCollage() {
-    const pool = S.banner.filter(b => bannerSrc(b.file));
-    const key = pool.map(b => b.id).join(',');
-    if (key !== R.collageKey) {
-      R.collageKey = key;
-      const shown = shuffle(pool.slice()).slice(0, SLOTS.length);
-      R.collage.replaceChildren(...shown.map((b, i) => {
-        const [rot, dy, ht] = SLOTS[i];
-        const img = h('img', { alt: '', style: { height: ht + 'px', transform: `translateY(${dy}px) rotate(${rot}deg) scale(1.08)`, zIndex: String(i % 2 ? 2 : 1) } });
-        setFrame(img, b);
-        return img;
-      }));
-    }
-    if (R.bannerPanel && !R.bannerPanel.classList.contains('hidden')) drawBannerPanel();
-  }
-  // with more photos than frames, swap one frame for an unseen photo every few seconds
-  setInterval(() => {
-    if (!R.collage || document.hidden || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    const frames = [...R.collage.children];
-    const on = new Set(frames.map(f => f.dataset.id));
-    const rest = S.banner.filter(b => bannerSrc(b.file) && !on.has(String(b.id)));
-    if (!frames.length || !rest.length) return;
-    const img = frames[Math.floor(Math.random() * frames.length)];
-    const next = rest[Math.floor(Math.random() * rest.length)];
-    const pre = new Image();
-    pre.onload = () => {
-      img.classList.add('fade');
-      setTimeout(() => { setFrame(img, next); img.classList.remove('fade'); }, 400);
-    };
-    pre.src = bannerSrc(next.file);
-  }, 5000);
-  function editBanner() {
-    const p = R.bannerPanel;
-    p.classList.toggle('hidden');
-    if (!p.classList.contains('hidden')) drawBannerPanel();
-  }
-  function drawBannerPanel() {
-    const pick = h('input', {
-      type: 'file', accept: 'image/jpeg,image/png,image/gif,image/webp', multiple: true,
-      onchange: async e => {
-        const list = [...e.target.files].slice(0, 6);
-        e.target.value = '';
-        if (!list.length) return;
-        const fd = new FormData();
-        for (const f of list) fd.append('files', await fitImage(f, 1200));
-        try { await api('/api/banner', fd, true); } catch (x) { toast(errMsg(x)); }
-      }
-    });
-    R.bannerPanel.replaceChildren(
-      h('div', { class: 'inline-form' },
-        h('b', null, `Fotos del banner (${S.banner.length})`),
-        h('span', { class: 'small muted' }, 'Se muestran 12 a la vez y van rotando. Cualquiera puede agregar o sacar.'),
-        h('span', { class: 'spacer' }),
-        h('label', { class: 'btn' }, 'Agregar fotos', pick),
-        h('button', { type: 'button', class: 'btn', onclick: editBanner }, 'Cerrar')),
-      h('div', { class: 'banner-grid' }, S.banner.filter(b => bannerSrc(b.file)).map(b => h('div', { class: 'thumb' },
-        h('img', { src: bannerSrc(b.file), alt: '', loading: 'lazy' }),
-        h('button', {
-          type: 'button', class: 'btn', title: 'Sacar del banner',
-          onclick: async () => {
-            if (!confirm('¿Sacar esta foto del banner?')) return;
-            try { await api(`/api/banner/${b.id}/delete`, {}); } catch (x) { toast(errMsg(x)); }
-          }
-        }, 'x')))));
   }
 
   const TICKER_DEFAULT = ['Bienvenidos a Upipination', 'Subí tu arte a la galería', 'Buena onda siempre'];
@@ -1339,7 +1256,7 @@
   };
   const SLOT = { size: 100, bold: 1, ital: 0, upper: 0, space: 0 };
   const slotDef = k => Object.fromEntries(Object.entries(SLOT).map(([n, v]) => [k + n, v]));
-  const THEME_DEF = { colors: null, font: 'default', fsize: 100, lineh: 145, hfont: 'default', nfont: 'same', bfont: 'same', ...slotDef('h'), ...slotDef('n'), ...slotDef('b'), bgMode: 'cover', glass: 0, avatar: 'square', border: 'solid', radius: 0, bannerH: 'medium', bannerY: 50, nameFx: 'none' };
+  const THEME_DEF = { colors: null, font: 'default', fsize: 100, lineh: 145, hfont: 'default', nfont: 'same', bfont: 'same', tfont: 'same', ...slotDef('h'), ...slotDef('n'), ...slotDef('b'), ...slotDef('t'), tital: 1, ttext: '', tcolor: null, tback: null, tplate: 'plate', ttilt: -2, talign: 'center', tpad: 22, tfx: 'none', bgMode: 'cover', glass: 0, avatar: 'square', border: 'solid', radius: 0, bannerH: 'medium', bannerY: 50, nameFx: 'none' };
   const COLOR_LABELS = [['bg', 'Fondo de la página'], ['panel', 'Cajas'], ['text', 'Texto'], ['accent', 'Links y detalles'], ['bar', 'Barras de título']];
   const col = (bg, panel, text, accent, bar) => ({ bg, panel, text, accent, bar });
   const PRESETS = [
@@ -1352,7 +1269,7 @@
     ['Máquina de escribir', { colors: col('#d9d0bb', '#fbf7ec', '#2a2520', '#8a2f12', '#4a4038'), font: 'special-elite', hfont: 'special-elite', border: 'dashed' }],
     ['Medieval', { colors: col('#2a2118', '#e9dcc0', '#2b1d0e', '#7a1f1f', '#5a3c1f'), font: 'georgia', hfont: 'unifrakturcook', border: 'double' }]
   ];
-  const THEME_VARS = ['--page', '--panel', '--row', '--row2', '--border', '--bar1', '--bar2', '--bartext', '--text', '--muted', '--link', '--accent', '--tab', '--tab-on', '--btn', '--input', '--ticker', '--tickertext', '--font', '--hfont', '--name-font', '--bar-font', '--fs', '--lh', '--hfs', '--nfs', '--bfs', ...['title', 'name', 'bar'].flatMap(k => ['weight', 'style', 'case', 'space'].map(v => `--${k}-${v}`)), '--radius', '--bstyle', '--bwidth', '--bgimg', '--bgsize', '--bgrep', '--n1', '--n2', '--n3', '--n4', '--n5', '--n6', '--sys'];
+  const THEME_VARS = ['--page', '--panel', '--row', '--row2', '--border', '--bar1', '--bar2', '--bartext', '--text', '--muted', '--link', '--accent', '--tab', '--tab-on', '--btn', '--input', '--ticker', '--tickertext', '--font', '--hfont', '--name-font', '--bar-font', '--site-font', '--site-color', '--site-back', '--site-border', '--site-shadow', '--site-tilt', '--site-align', '--site-pad', '--fs', '--lh', '--hfs', '--nfs', '--bfs', '--sfs', ...['title', 'name', 'bar', 'site'].flatMap(k => ['weight', 'style', 'case', 'space'].map(v => `--${k}-${v}`)), '--radius', '--bstyle', '--bwidth', '--bgimg', '--bgsize', '--bgrep', '--n1', '--n2', '--n3', '--n4', '--n5', '--n6', '--sys'];
   // Uploaded fonts: the browser learns each one by name ('upi-f' + id) and only downloads it when something uses it.
   const FONT_FILE = /^[a-f0-9]{32}\.(woff2|woff|ttf|otf)$/;
   function syncFonts() {
@@ -1390,6 +1307,7 @@
     THEME_VARS.forEach(v => b.style.removeProperty(v));
     b.style.backgroundImage = b.style.backgroundSize = b.style.backgroundRepeat = '';
     b.classList.remove('themed', 'bgfix', 'avround');
+    if (R.title) { R.title.className = 'title-plate'; R.title.textContent = SITE_NAME; }
     R.themed = false;
   }
   function wearTheme(t, bg) {
@@ -1420,12 +1338,19 @@
     if (t.hfont !== 'default' && fontCss(t.hfont)) set('--hfont', fontCss(t.hfont));
     if (t.nfont !== 'same' && fontCss(t.nfont)) set('--name-font', fontCss(t.nfont));
     if (t.bfont !== 'same' && fontCss(t.bfont)) set('--bar-font', fontCss(t.bfont));
+    // the page title at the top
+    if (t.tfont !== 'same' && fontCss(t.tfont)) set('--site-font', fontCss(t.tfont));
+    if (t.tcolor) set('--site-color', t.tcolor);
+    if (t.tback) set('--site-back', t.tback);
+    if (t.tplate === 'none') { set('--site-back', 'transparent'); set('--site-border', '0'); set('--site-shadow', 'none'); }
+    set('--site-tilt', t.ttilt + 'deg'); set('--site-align', t.talign); set('--site-pad', t.tpad + 'px');
+    if (R.title) { R.title.className = 'title-plate fx-' + t.tfx; R.title.textContent = t.ttext || SITE_NAME; }
     if (t.fsize !== 100) set('--fs', String(t.fsize / 100));
     if (t.lineh !== 145) set('--lh', String(t.lineh / 100));
-    for (const [k, name, fs] of [['h', 'title', '--hfs'], ['n', 'name', '--nfs'], ['b', 'bar', '--bfs']]) {
+    for (const [k, name, fs] of [['h', 'title', '--hfs'], ['n', 'name', '--nfs'], ['b', 'bar', '--bfs'], ['t', 'site', '--sfs']]) {
       if (t[k + 'size'] !== 100) set(fs, String(t[k + 'size'] / 100));
       if (!t[k + 'bold']) set(`--${name}-weight`, 'normal');
-      if (t[k + 'ital']) set(`--${name}-style`, 'italic');
+      if (t[k + 'ital'] !== (k === 't' ? 1 : 0)) set(`--${name}-style`, t[k + 'ital'] ? 'italic' : 'normal');
       if (t[k + 'upper']) set(`--${name}-case`, 'uppercase');
       if (t[k + 'space']) set(`--${name}-space`, t[k + 'space'] + 'px');
     }
@@ -1738,6 +1663,11 @@
     };
     const check = (label, key) => h('label', { class: 'inline-form small' },
       h('input', { type: 'checkbox', checked: !!t[key], onchange: e => { t[key] = e.target.checked ? 1 : 0; touch(); } }), label);
+    // an optional colour: unticked means "the theme's own"
+    const optColor = (label, key, from) => h('label', { class: 'inline-form small' },
+      h('input', { type: 'checkbox', checked: !!t[key], onchange: e => { t[key] = e.target.checked ? rootVar(from) : null; if (t[key] && !/^#[0-9a-f]{6}$/i.test(t[key])) t[key] = '#ffffff'; redraw(); } }),
+      label, t[key] ? h('input', { type: 'color', value: t[key], oninput: e => { t[key] = e.target.value; touch(); } }) : null);
+    const titleText = h('input', { class: 'input', maxLength: 30, placeholder: SITE_NAME, value: t.ttext, oninput: e => { t.ttext = e.target.value; touch(); } });
     const fontBtn = (key, k, label, family) =>
       h('button', { type: 'button', class: t[key] === k ? 'on' : '', 'aria-pressed': String(t[key] === k), style: { fontFamily: family }, onclick: () => { t[key] = k; redraw(); } }, label);
     // built-in fonts first, then the ones people uploaded; "same" follows another slot
@@ -1849,7 +1779,7 @@
       group('Temas listos (después podés cambiarles lo que quieras)', h('div', { class: 'inline-form' }, PRESETS.map(([name, preset]) =>
         h('button', {
           type: 'button', class: 'btn',
-          onclick: () => { d.theme = { ...THEME_DEF, bgMode: t.bgMode, bannerH: t.bannerH, bannerY: t.bannerY, glass: t.glass, ...preset, colors: preset.colors ? { ...preset.colors } : null }; redraw(); }
+          onclick: () => { d.theme = { ...THEME_DEF, bgMode: t.bgMode, bannerH: t.bannerH, bannerY: t.bannerY, glass: t.glass, ttext: t.ttext, ...preset, colors: preset.colors ? { ...preset.colors } : null }; redraw(); }
         }, preset.colors ? [h('span', { class: 'pf-swatch', style: { background: preset.colors.bg } }), h('span', { class: 'pf-swatch', style: { background: preset.colors.accent } })] : null, name)))),
       group('Sobre vos', field('Frase debajo de tu nombre:', tagline), field('Sobre mí:', bio)),
       group('Banner (la foto ancha de arriba)', picture('banner', 'banner', 2000),
@@ -1866,6 +1796,15 @@
         S.fonts.length ? fontList : null),
       group('Letra del texto', fontRow('font'),
         h('div', { class: 'inline-form' }, slider('Tamaño:', 'fsize', 80, 150, '%'), slider('Espacio entre renglones:', 'lineh', 100, 220, '%'))),
+      group('Título de la página (el cartel de arriba de todo)',
+        field('Qué dice (vacío: «Upipination»):', titleText),
+        fontRow('tfont', 'Igual que los títulos'), styleRow('t'),
+        h('div', { class: 'inline-form' },
+          field('Cartel:', sel('tplate', [['plate', 'Con cartel'], ['none', 'Solo las letras']])),
+          field('Efecto:', sel('tfx', [['none', 'Ninguno'], ['shadow', 'Sombra'], ['glow', 'Neón'], ['rainbow', 'Arcoíris']])),
+          field('Lugar:', sel('talign', [['center', 'Al centro'], ['left', 'A la izquierda'], ['right', 'A la derecha']]))),
+        h('div', { class: 'inline-form' }, slider('Inclinación:', 'ttilt', -10, 10, '°'), slider('Aire arriba y abajo:', 'tpad', 0, 120, 'px')),
+        h('div', { class: 'inline-form pf-checks' }, optColor('Color propio para las letras', 'tcolor', '--text'), optColor('Color propio para el cartel', 'tback', '--panel'))),
       group('Letra de los títulos', fontRow('hfont'), styleRow('h')),
       group('Letra de tu nombre', fontRow('nfont', 'Igual que los títulos'), styleRow('n')),
       group('Letra de las barras y pestañas', fontRow('bfont', 'Igual que el texto'), styleRow('b')),
