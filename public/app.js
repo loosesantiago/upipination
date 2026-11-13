@@ -56,6 +56,9 @@
   }
   const ERR = {
     rate: 'Vas muy rápido. Esperá unos segundos.',
+    font: 'Ese archivo no parece una letra. Tiene que ser TTF, OTF, WOFF o WOFF2 y pesar hasta 3 MB.',
+    font_name: 'Ponele un nombre de 1 a 30 caracteres.',
+    font_full: 'Ya subiste 15 letras. Borrá alguna para subir otra.',
     file: 'Ese archivo no se puede subir: tipo o tamaño no permitido (fotos JPG, PNG, GIF o WEBP hasta 12 MB; videos MP4, WEBM o MOV hasta 60 MB).',
     emoji_taken: 'Ese nombre de emote ya lo usa otra persona.',
     empty: 'Escribí algo o agregá una foto.',
@@ -179,8 +182,9 @@
     S.me = st.me; S.users = {};
     st.users.forEach(u => { S.users[u.id] = u; });
     S.live = st.live; liveClock(st.live);
-    Object.assign(S, { chat: st.chat, posts: st.posts, events: st.events, art: st.art, emojis: st.emojis, notifs: st.notifs, stats: st.stats, online: st.online, ticker: st.ticker, banner: st.banner, music: st.music, radio: st.radio });
+    Object.assign(S, { chat: st.chat, posts: st.posts, events: st.events, art: st.art, emojis: st.emojis, notifs: st.notifs, stats: st.stats, online: st.online, ticker: st.ticker, banner: st.banner, music: st.music, radio: st.radio, fonts: st.fonts || [], skin: st.skin || null });
     buildMentionRe();
+    syncFonts();
   }
   let reloadTimer;
   function reload() {
@@ -331,7 +335,7 @@
     }
     R.profile.replaceChildren(
       h('label', { class: 'pic', title: 'Cambiar foto' }, avatar(S.me.id, 84), picInput()),
-      h('b', { style: { fontSize: '13px', color: colorOf(S.me.id) } }, S.me.name),
+      h('b', { style: { fontSize: 'calc(13px * var(--fs))', color: colorOf(S.me.id) } }, S.me.name),
       nickArea,
       h('div', { class: 'stats' },
         stat('Mensajes:', S.stats.messages),
@@ -652,7 +656,7 @@
     const goEvent = h('button', { class: 'linkbtn', type: 'button', onclick: () => goTab('event') }, '» Ver eventos');
     if (nx) {
       const f = fmt(nx);
-      R.nextBox.replaceChildren(h('span', { class: 'kicker' }, f.countdown), h('b', { style: { fontSize: '13px' } }, f.title), h('span', { class: 'small muted' }, `${f.dateText} · ${f.timeText}`), h('span', { class: 'small' }, f.goingText), goEvent);
+      R.nextBox.replaceChildren(h('span', { class: 'kicker' }, f.countdown), h('b', { style: { fontSize: 'calc(13px * var(--fs))' } }, f.title), h('span', { class: 'small muted' }, `${f.dateText} · ${f.timeText}`), h('span', { class: 'small' }, f.goingText), goEvent);
     } else {
       R.nextBox.replaceChildren(h('span', { class: 'muted' }, 'Todavía no hay nada planeado.'), goEvent);
     }
@@ -703,7 +707,7 @@
     }
     const prof = S.tab === 'profile';
     R.wrap.classList.toggle('profiling', prof);
-    if (!prof) { clearTheme(); R.pf = null; R.pview.replaceChildren(); }
+    if (!prof) { baseTheme(); R.pf = null; R.pview.replaceChildren(); }
     if (living) return showLive();
     hideLive();
     if (prof) return;
@@ -768,7 +772,7 @@
       const cin = h('input', { class: 'input', maxLength: 1000, placeholder: 'Escribí un comentario', autocomplete: 'off', 'data-k': key + p.id });
       withMentions(cin);
       return h('article', { class: 'post', 'data-post': p.id },
-        h('div', { class: 'post-author go', title: 'Ver su perfil', onclick: () => openProfile(p.uid) }, h('b', { style: { fontSize: '13px', color: colorOf(p.uid) } }, u.name), avatar(p.uid, 64), h('span', { class: 'tiny muted' }, 'Posts: ' + count)),
+        h('div', { class: 'post-author go', title: 'Ver su perfil', onclick: () => openProfile(p.uid) }, h('b', { style: { fontSize: 'calc(13px * var(--fs))', color: colorOf(p.uid) } }, u.name), avatar(p.uid, 64), h('span', { class: 'tiny muted' }, 'Posts: ' + count)),
         h('div', { class: 'post-main' },
           h('div', { class: 'post-meta' }, 'Publicado ' + ago(p.ts)),
           h('div', { class: 'post-body' },
@@ -1333,7 +1337,9 @@
     unifrakturcook: ['Unifraktur', "'UnifrakturCook', serif"],
     cinzel: ['Cinzel', "'Cinzel', Georgia, serif"]
   };
-  const THEME_DEF = { colors: null, font: 'default', hfont: 'default', bgMode: 'cover', glass: 0, avatar: 'square', border: 'solid', radius: 0, bannerH: 'medium', bannerY: 50, nameFx: 'none' };
+  const SLOT = { size: 100, bold: 1, ital: 0, upper: 0, space: 0 };
+  const slotDef = k => Object.fromEntries(Object.entries(SLOT).map(([n, v]) => [k + n, v]));
+  const THEME_DEF = { colors: null, font: 'default', fsize: 100, lineh: 145, hfont: 'default', nfont: 'same', bfont: 'same', ...slotDef('h'), ...slotDef('n'), ...slotDef('b'), bgMode: 'cover', glass: 0, avatar: 'square', border: 'solid', radius: 0, bannerH: 'medium', bannerY: 50, nameFx: 'none' };
   const COLOR_LABELS = [['bg', 'Fondo de la página'], ['panel', 'Cajas'], ['text', 'Texto'], ['accent', 'Links y detalles'], ['bar', 'Barras de título']];
   const col = (bg, panel, text, accent, bar) => ({ bg, panel, text, accent, bar });
   const PRESETS = [
@@ -1346,7 +1352,32 @@
     ['Máquina de escribir', { colors: col('#d9d0bb', '#fbf7ec', '#2a2520', '#8a2f12', '#4a4038'), font: 'special-elite', hfont: 'special-elite', border: 'dashed' }],
     ['Medieval', { colors: col('#2a2118', '#e9dcc0', '#2b1d0e', '#7a1f1f', '#5a3c1f'), font: 'georgia', hfont: 'unifrakturcook', border: 'double' }]
   ];
-  const THEME_VARS = ['--page', '--panel', '--row', '--row2', '--border', '--bar1', '--bar2', '--bartext', '--text', '--muted', '--link', '--accent', '--tab', '--tab-on', '--btn', '--input', '--ticker', '--tickertext', '--font', '--hfont', '--radius', '--bstyle', '--bwidth', '--bgimg', '--bgsize', '--bgrep', '--n1', '--n2', '--n3', '--n4', '--n5', '--n6', '--sys'];
+  const THEME_VARS = ['--page', '--panel', '--row', '--row2', '--border', '--bar1', '--bar2', '--bartext', '--text', '--muted', '--link', '--accent', '--tab', '--tab-on', '--btn', '--input', '--ticker', '--tickertext', '--font', '--hfont', '--name-font', '--bar-font', '--fs', '--lh', '--hfs', '--nfs', '--bfs', ...['title', 'name', 'bar'].flatMap(k => ['weight', 'style', 'case', 'space'].map(v => `--${k}-${v}`)), '--radius', '--bstyle', '--bwidth', '--bgimg', '--bgsize', '--bgrep', '--n1', '--n2', '--n3', '--n4', '--n5', '--n6', '--sys'];
+  // Uploaded fonts: the browser learns each one by name ('upi-f' + id) and only downloads it when something uses it.
+  const FONT_FILE = /^[a-f0-9]{32}\.(woff2|woff|ttf|otf)$/;
+  function syncFonts() {
+    const faces = R.faces || (R.faces = {});
+    if (!window.FontFace || !document.fonts) return;
+    const live = {};
+    for (const f of S.fonts) if (FONT_FILE.test(f.file)) live[f.id] = f.file;
+    for (const id in faces) if (faces[id].file !== live[id]) { document.fonts.delete(faces[id].face); delete faces[id]; }
+    for (const id in live) {
+      if (faces[id]) continue;
+      const face = new FontFace('upi-f' + id, `url("/uploads/${live[id]}")`, { display: 'swap' });
+      document.fonts.add(face);
+      faces[id] = { face, file: live[id] };
+    }
+  }
+  // the CSS font list for a font key: a built-in one, or an uploaded one ('u' + id); null if it no longer exists
+  function fontCss(key) {
+    if (FONTS[key]) return FONTS[key][1];
+    const m = /^u(\d+)$/.exec(key || '');
+    return m && S.fonts.some(f => f.id === Number(m[1])) ? `'upi-f${m[1]}', ${FONTS.default[1]}` : null;
+  }
+  // the look outside of profiles: your own, if you chose to wear it on the whole site
+  function baseTheme() {
+    if (S.skin) wearTheme({ ...THEME_DEF, ...S.skin.theme }, S.skin.bg); else clearTheme();
+  }
   const rootVar = k => getComputedStyle(document.documentElement).getPropertyValue(k).trim();
   // black or white, whichever reads better on that colour
   function contrast(hex) {
@@ -1358,7 +1389,7 @@
     const b = document.body;
     THEME_VARS.forEach(v => b.style.removeProperty(v));
     b.style.backgroundImage = b.style.backgroundSize = b.style.backgroundRepeat = '';
-    b.classList.remove('themed', 'bgfix');
+    b.classList.remove('themed', 'bgfix', 'avround');
     R.themed = false;
   }
   function wearTheme(t, bg) {
@@ -1385,8 +1416,20 @@
     } else if (t.glass) {
       for (const k of ['--panel', '--row', '--row2']) set(k, glass(rootVar(k)));
     }
-    if (t.font !== 'default' && FONTS[t.font]) set('--font', FONTS[t.font][1]);
-    if (t.hfont !== 'default' && FONTS[t.hfont]) set('--hfont', FONTS[t.hfont][1]);
+    if (t.font !== 'default' && fontCss(t.font)) set('--font', fontCss(t.font));
+    if (t.hfont !== 'default' && fontCss(t.hfont)) set('--hfont', fontCss(t.hfont));
+    if (t.nfont !== 'same' && fontCss(t.nfont)) set('--name-font', fontCss(t.nfont));
+    if (t.bfont !== 'same' && fontCss(t.bfont)) set('--bar-font', fontCss(t.bfont));
+    if (t.fsize !== 100) set('--fs', String(t.fsize / 100));
+    if (t.lineh !== 145) set('--lh', String(t.lineh / 100));
+    for (const [k, name, fs] of [['h', 'title', '--hfs'], ['n', 'name', '--nfs'], ['b', 'bar', '--bfs']]) {
+      if (t[k + 'size'] !== 100) set(fs, String(t[k + 'size'] / 100));
+      if (!t[k + 'bold']) set(`--${name}-weight`, 'normal');
+      if (t[k + 'ital']) set(`--${name}-style`, 'italic');
+      if (t[k + 'upper']) set(`--${name}-case`, 'uppercase');
+      if (t[k + 'space']) set(`--${name}-space`, t[k + 'space'] + 'px');
+    }
+    b.classList.toggle('avround', t.avatar === 'round');
     set('--bstyle', t.border); set('--bwidth', t.border === 'double' ? '3px' : '1px'); set('--radius', t.radius + 'px');
     const src = up(bg);
     if (!src) return;
@@ -1495,7 +1538,7 @@
     const t = { ...THEME_DEF, ...(d ? d.theme : p ? p.theme : {}) };
     const tagline = d ? d.tagline : p ? p.tagline : '';
     const bio = d ? d.bio : p ? p.bio : '';
-    wearTheme(t, p && p.bg);
+    if (p) wearTheme(t, p.bg); else baseTheme(); // while it loads, keep the look you had
 
     const everyone = Object.values(S.users).sort((a, b) => a.name.localeCompare(b.name, LOC));
     f.people.replaceChildren(h('b', { class: 'small' }, 'Perfiles:'), ...everyone.map(x =>
@@ -1513,7 +1556,16 @@
     } else f.banner.replaceChildren();
 
     const on = mine || S.online.includes(id);
-    const editBtn = mine && p && !d ? h('button', { class: 'btn', type: 'button', onclick: editProfile }, '✎ Editar mi perfil') : '';
+    const editBtn = mine && p && !d ? h('div', { class: 'pf-actions' },
+      h('button', { class: 'btn', type: 'button', onclick: editProfile }, '✎ Editar mi perfil'),
+      h('button', {
+        class: 'btn' + (p.sitewide ? ' on' : ''), type: 'button', 'aria-pressed': String(!!p.sitewide),
+        title: 'Con esto prendido ves todo Upipination (chat, muro, eventos…) con los colores, letras y fondo de tu perfil. Solo lo ves vos: cada uno elige el suyo.',
+        onclick: async e => {
+          e.currentTarget.disabled = true;
+          try { await api('/api/profile/sitewide', { on: !p.sitewide }); await loadState(); await loadProfile(); } catch (x) { toast(errMsg(x)); paintProfile(); }
+        }
+      }, p.sitewide ? '✓ Veo todo el sitio con mi tema' : 'Ver todo el sitio con mi tema')) : '';
     f.head.replaceChildren(
       h('div', { class: 'pf-av ' + t.avatar }, avatar(id, 112)),
       h('div', { class: 'pf-id' },
@@ -1678,8 +1730,59 @@
       return s;
     };
     const range = (key, min, max) => h('input', { type: 'range', min: String(min), max: String(max), value: String(t[key]), oninput: e => { t[key] = Number(e.target.value); touch(); } });
-    const fontRow = key => h('div', { class: 'pf-fonts' }, Object.keys(FONTS).map(k =>
-      h('button', { type: 'button', class: t[key] === k ? 'on' : '', 'aria-pressed': String(t[key] === k), style: { fontFamily: FONTS[k][1] }, onclick: () => { t[key] = k; redraw(); } }, FONTS[k][0])));
+    // a slider that shows its value next to the label
+    const slider = (label, key, min, max, unit) => {
+      const val = h('b', null, ` ${t[key]}${unit}`);
+      return h('label', { class: 'field' }, h('span', { class: 'label' }, label, val),
+        h('input', { type: 'range', min: String(min), max: String(max), value: String(t[key]), oninput: e => { t[key] = Number(e.target.value); val.textContent = ` ${t[key]}${unit}`; touch(); } }));
+    };
+    const check = (label, key) => h('label', { class: 'inline-form small' },
+      h('input', { type: 'checkbox', checked: !!t[key], onchange: e => { t[key] = e.target.checked ? 1 : 0; touch(); } }), label);
+    const fontBtn = (key, k, label, family) =>
+      h('button', { type: 'button', class: t[key] === k ? 'on' : '', 'aria-pressed': String(t[key] === k), style: { fontFamily: family }, onclick: () => { t[key] = k; redraw(); } }, label);
+    // built-in fonts first, then the ones people uploaded; "same" follows another slot
+    const fontRow = (key, same) => h('div', { class: 'pf-fonts' },
+      same ? fontBtn(key, 'same', same, 'inherit') : null,
+      Object.keys(FONTS).map(k => fontBtn(key, k, FONTS[k][0], FONTS[k][1])),
+      S.fonts.map(x => fontBtn(key, 'u' + x.id, x.name, fontCss('u' + x.id))));
+    // size, bold, italics, capitals and letter spacing of one kind of text
+    const styleRow = k => [
+      h('div', { class: 'inline-form' }, slider('Tamaño:', k + 'size', 60, 200, '%'), slider('Separación entre letras:', k + 'space', 0, 8, 'px')),
+      h('div', { class: 'inline-form pf-checks' }, check('Negrita', k + 'bold'), check('Cursiva', k + 'ital'), check('TODO EN MAYÚSCULAS', k + 'upper'))];
+    // uploading a font: it is checked here first, so a broken file never gets sent
+    const fontBusy = h('span', { class: 'small muted' });
+    const fontPick = h('input', {
+      type: 'file', accept: '.ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2',
+      onchange: async e => {
+        const file = e.target.files[0];
+        e.target.value = '';
+        if (!file) return;
+        if (file.size > 3e6) return toast(ERR.font);
+        try { await new FontFace('upi-check', await file.arrayBuffer()).load(); } catch (x) { return toast(ERR.font); }
+        const name = (prompt('¿Qué nombre le ponemos a esta letra?', file.name.replace(/\.[a-z0-9]+$/i, '').replace(/[-_]+/g, ' ').slice(0, 30)) || '').trim();
+        if (!name) return;
+        fontBusy.textContent = 'Subiendo…';
+        try {
+          const fd = new FormData();
+          fd.append('name', name.slice(0, 30));
+          fd.append('file', file, 'font');
+          await api('/api/fonts', fd, true);
+          await loadState();
+        } catch (x) { toast(errMsg(x)); }
+        if (R.draft) drawEditor();
+      }
+    });
+    const fontList = h('div', { class: 'pf-fonts' }, S.fonts.map(x => h('span', { class: 'pf-font' },
+      h('span', { style: { fontFamily: fontCss('u' + x.id) } }, x.name),
+      h('span', { class: 'tiny muted' }, x.uid === S.me.id ? 'tuya' : 'de ' + userOf(x.uid).name),
+      x.uid === S.me.id ? h('button', {
+        type: 'button', class: 'linkbtn', title: 'Borrar esta letra',
+        onclick: async () => {
+          if (!confirm(`¿Borrar la letra «${x.name}»? Los perfiles que la usan vuelven a la letra clásica.`)) return;
+          try { await api(`/api/fonts/${x.id}/delete`, {}); await loadState(); } catch (err) { toast(errMsg(err)); }
+          if (R.draft) drawEditor();
+        }
+      }, 'x') : null)));
     // banner and background are uploaded straight away (like the profile photo)
     const picture = (kind, label, max) => {
       const busy = h('span', { class: 'small muted' });
@@ -1758,8 +1861,14 @@
           field('Cómo se muestra:', sel('bgMode', [['cover', 'Llena la pantalla'], ['tile', 'Mosaico (se repite)'], ['tilefix', 'Mosaico fijo']])),
           field('Transparencia de las cajas (para que se vea el fondo):', range('glass', 0, 70)))),
       group('Colores', h('label', { class: 'inline-form small' }, ownBox, 'Usar mis propios colores'), colors),
-      group('Letra de los títulos y de tu nombre', fontRow('hfont')),
-      group('Letra del texto', fontRow('font')),
+      group('Letras subidas (las puede usar cualquiera del grupo)',
+        h('div', { class: 'inline-form' }, h('label', { class: 'btn' }, 'Subir una letra', fontPick), h('span', { class: 'small muted' }, 'Archivos TTF, OTF, WOFF o WOFF2 de hasta 3 MB.'), fontBusy),
+        S.fonts.length ? fontList : null),
+      group('Letra del texto', fontRow('font'),
+        h('div', { class: 'inline-form' }, slider('Tamaño:', 'fsize', 80, 150, '%'), slider('Espacio entre renglones:', 'lineh', 100, 220, '%'))),
+      group('Letra de los títulos', fontRow('hfont'), styleRow('h')),
+      group('Letra de tu nombre', fontRow('nfont', 'Igual que los títulos'), styleRow('n')),
+      group('Letra de las barras y pestañas', fontRow('bfont', 'Igual que el texto'), styleRow('b')),
       group('Detalles',
         h('div', { class: 'inline-form' },
           field('Efecto del nombre:', sel('nameFx', [['none', 'Ninguno'], ['shadow', 'Sombra'], ['glow', 'Neón'], ['rainbow', 'Arcoíris']])),

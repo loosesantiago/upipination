@@ -70,6 +70,13 @@ if (!db.prepare("SELECT 1 FROM pragma_table_info('notifs') WHERE name = 'wall_id
   db.exec('ALTER TABLE notifs ADD COLUMN wall_id INTEGER REFERENCES wall(id) ON DELETE CASCADE');
 }
 
+// fonts people upload: anyone can then pick them for their profile
+db.exec(`CREATE TABLE IF NOT EXISTS fonts (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, name TEXT NOT NULL, file TEXT NOT NULL, ts INTEGER NOT NULL)`);
+// sitewide = 1: this person sees the whole site dressed like their own profile
+if (!db.prepare("SELECT 1 FROM pragma_table_info('profiles') WHERE name = 'sitewide'").get()) {
+  db.exec('ALTER TABLE profiles ADD COLUMN sitewide INTEGER NOT NULL DEFAULT 0');
+}
+
 // birthday: 'MM-DD', or 'YYYY-MM-DD' when the person also gave the year (column added for older databases)
 if (!db.prepare("SELECT 1 FROM pragma_table_info('profiles') WHERE name = 'birthday'").get()) {
   db.exec('ALTER TABLE profiles ADD COLUMN birthday TEXT');
@@ -155,7 +162,13 @@ const q = {
   wallAdd: db.prepare('INSERT INTO wall (profile_id, user_id, text, ts) VALUES (?, ?, ?, ?)'),
   wallDel: db.prepare('DELETE FROM wall WHERE id = ?'),
   userFull: db.prepare('SELECT id, name, avatar, created FROM users WHERE id = ?'),
-  profileGet: db.prepare('SELECT banner, bg, tagline, bio, theme, birthday FROM profiles WHERE user_id = ?'),
+  profileGet: db.prepare('SELECT banner, bg, tagline, bio, theme, birthday, sitewide FROM profiles WHERE user_id = ?'),
+  sitewidePut: db.prepare('INSERT INTO profiles (user_id, sitewide, ts) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET sitewide = excluded.sitewide'),
+  fonts: db.prepare('SELECT id, user_id AS uid, name, file FROM fonts ORDER BY name COLLATE NOCASE, id'),
+  fontGet: db.prepare('SELECT id, user_id, file FROM fonts WHERE id = ?'),
+  fontCount: db.prepare('SELECT COUNT(*) AS n FROM fonts WHERE user_id = ?'),
+  fontAdd: db.prepare('INSERT INTO fonts (user_id, name, file, ts) VALUES (?, ?, ?, ?)'),
+  fontDel: db.prepare('DELETE FROM fonts WHERE id = ?'),
   birthdayPut: db.prepare('INSERT INTO profiles (user_id, birthday, ts) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET birthday = excluded.birthday, ts = excluded.ts'),
   wishesBy: db.prepare('SELECT id, title, url, ts FROM wishes WHERE user_id = ? ORDER BY id'),
   wishCount: db.prepare('SELECT COUNT(*) AS n FROM wishes WHERE user_id = ?'),
@@ -187,7 +200,7 @@ const newToken = () => crypto.randomBytes(32).toString('base64url');
 const toId = v => (/^\d{1,12}$/.test(String(v)) ? Number(v) : 0);
 const A = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 const pub = u => ({ id: u.id, name: u.name, avatar: u.avatar || null });
-const FILE_RE = /^[a-f0-9]{32}\.(jpg|png|gif|webp|mp4|webm|mov)$/;
+const FILE_RE = /^[a-f0-9]{32}\.(jpg|png|gif|webp|mp4|webm|mov|woff2|woff|ttf|otf)$/;
 
 // @mentions use display names (which may contain spaces). Longest names are matched first,
 // so "@Ana María" tags Ana María and not also Ana. "@all" tags everyone.
@@ -272,7 +285,8 @@ const drop = list => (list || []).forEach(f => fs.rmSync(f.path, { force: true }
 
 const IMG = ['jpg', 'png', 'gif', 'webp'];
 const MEDIA = [...IMG, 'mp4', 'webm', 'mov'];
-const MAX = { jpg: 12e6, png: 12e6, gif: 12e6, webp: 12e6, mp4: 60e6, webm: 60e6, mov: 60e6 };
+const FONT = ['woff2', 'woff', 'ttf', 'otf'];
+const MAX = { jpg: 12e6, png: 12e6, gif: 12e6, webp: 12e6, mp4: 60e6, webm: 60e6, mov: 60e6, woff2: 3e6, woff: 3e6, ttf: 3e6, otf: 3e6 };
 
 // identify the real file type from its first bytes (never trust the name or browser-sent type)
 function sniff(p) {
@@ -285,6 +299,10 @@ function sniff(p) {
   if (b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'png';
   if (ascii(0, 4) === 'GIF8') return 'gif';
   if (ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP') return 'webp';
+  if (ascii(0, 4) === 'wOF2') return 'woff2';
+  if (ascii(0, 4) === 'wOFF') return 'woff';
+  if (ascii(0, 4) === 'OTTO') return 'otf';
+  if (ascii(0, 4) === 'true' || b.subarray(0, 4).equals(Buffer.from([0, 1, 0, 0]))) return 'ttf';
   if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return 'webm';
   if (ascii(4, 8) === 'ftyp') {
     const brand = ascii(8, 12);
@@ -456,7 +474,9 @@ app.get('/api/state', requireUser, (req, res) => {
     ticker: tickerLines(),
     banner: q.banner.all(),
     music: q.music.all(),
-    radio: radioState()
+    radio: radioState(),
+    fonts: q.fonts.all(),
+    skin: skinOf(req.user.id)
   });
 });
 
@@ -564,10 +584,14 @@ app.post('/api/avatar', requireUser, files('file', 1), (req, res) => {
 // Only known values get stored: colours must be #rrggbb, everything else comes from fixed lists.
 const PROFILE_FONTS = ['default', 'georgia', 'courier', 'trebuchet', 'comic-neue', 'special-elite', 'pacifico', 'lobster', 'bangers', 'creepster', 'permanent-marker', 'press-start-2p', 'vt323', 'orbitron', 'unifrakturcook', 'cinzel'];
 const COLOR_KEYS = ['bg', 'panel', 'text', 'accent', 'bar'];
+// a font is one of the built-in ones or an uploaded one ('u' + its id); 'same' means "like the slot it follows"
+const fontOk = v => PROFILE_FONTS.includes(v) || (typeof v === 'string' && /^u\d{1,9}$/.test(v) && !!q.fontGet.get(Number(v.slice(1))));
 function cleanTheme(t) {
   if (!t || typeof t !== 'object' || Array.isArray(t)) return null;
   const pick = (v, list) => (list.includes(v) ? v : list[0]);
   const int = (v, lo, hi, d) => (Number.isInteger(v) && v >= lo && v <= hi ? v : d);
+  const font = (v, d) => (fontOk(v) || (d === 'same' && v === 'same') ? v : d);
+  const flag = (v, d) => (v === 0 || v === 1 ? v : d);
   let colors = null;
   if (t.colors != null) {
     if (typeof t.colors !== 'object') return null;
@@ -578,10 +602,12 @@ function cleanTheme(t) {
       colors[k] = v.toLowerCase();
     }
   }
-  return {
+  const out = {
     colors,
-    font: pick(t.font, PROFILE_FONTS),
-    hfont: pick(t.hfont, PROFILE_FONTS),
+    font: font(t.font, 'default'), fsize: int(t.fsize, 80, 150, 100), lineh: int(t.lineh, 100, 220, 145),
+    hfont: font(t.hfont, 'default'),
+    nfont: font(t.nfont, 'same'),
+    bfont: font(t.bfont, 'same'),
     bgMode: pick(t.bgMode, ['cover', 'tile', 'tilefix']),
     glass: int(t.glass, 0, 70, 0),
     avatar: pick(t.avatar, ['square', 'round']),
@@ -591,8 +617,27 @@ function cleanTheme(t) {
     bannerY: int(t.bannerY, 0, 100, 50),
     nameFx: pick(t.nameFx, ['none', 'shadow', 'glow', 'rainbow'])
   };
+  // titles (h), the profile name (n) and the box bars and tabs (b): size, bold, italic, capitals, letter spacing
+  for (const k of ['h', 'n', 'b']) {
+    out[k + 'size'] = int(t[k + 'size'], 60, 200, 100);
+    out[k + 'bold'] = flag(t[k + 'bold'], 1);
+    out[k + 'ital'] = flag(t[k + 'ital'], 0);
+    out[k + 'upper'] = flag(t[k + 'upper'], 0);
+    out[k + 'space'] = int(t[k + 'space'], 0, 8, 0);
+  }
+  return out;
 }
+const storedTheme = raw => {
+  let theme = null;
+  try { theme = cleanTheme(JSON.parse(raw || '{}')); } catch (e) {}
+  return theme || cleanTheme({});
+};
 const safeFile = f => (f && FILE_RE.test(f) ? f : null);
+// the look this person chose to wear on the whole site (null: the normal look)
+function skinOf(uid) {
+  const p = q.profileGet.get(uid);
+  return p && p.sitewide ? { theme: storedTheme(p.theme), bg: safeFile(p.bg) } : null;
+}
 
 app.get('/api/profile/:id', requireUser, (req, res) => {
   const id = toId(req.params.id);
@@ -603,13 +648,12 @@ app.get('/api/profile/:id', requireUser, (req, res) => {
   for (const c of q.commentsBy.all(id)) (byPost[c.post_id] ||= []).push({ id: c.id, uid: c.uid, text: c.text, ts: c.ts });
   const yeahsBy = {};
   for (const y of q.yeahsBy.all(id)) (yeahsBy[y.post_id] ||= []).push(y.user_id);
-  let theme = null;
-  try { theme = cleanTheme(JSON.parse(p.theme || '{}')); } catch (e) {}
   res.json({
     id, joined: u.created,
     banner: safeFile(p.banner), bg: safeFile(p.bg),
     tagline: p.tagline || '', bio: p.bio || '',
-    theme: theme || cleanTheme({}),
+    theme: storedTheme(p.theme),
+    sitewide: id === req.user.id ? !!p.sitewide : undefined,
     stats: q.countsBy.get({ id }),
     posts: q.postsBy.all(id).map(x => ({ ...x, media: JSON.parse(x.media), comments: byPost[x.id] || [], yeahs: yeahsBy[x.id] || [] })),
     art: q.artBy.all(id),
@@ -704,6 +748,34 @@ app.post('/api/profile', requireUser, (req, res) => {
   const theme = cleanTheme(b.theme);
   if (tagline === null || bio === null || !theme) return res.status(400).json({ error: 'profile' });
   q.profilePut.run(req.user.id, tagline, bio, JSON.stringify(theme), now());
+  changed();
+  res.json({ ok: true });
+});
+
+app.post('/api/profile/sitewide', requireUser, (req, res) => {
+  if (typeof req.body?.on !== 'boolean') return res.status(400).json({ error: 'profile' });
+  q.sitewidePut.run(req.user.id, req.body.on ? 1 : 0, now());
+  res.json({ ok: true });
+});
+
+// Fonts: anyone can upload a font file, and then everybody can pick it for their profile.
+app.post('/api/fonts', requireUser, files('file', 1), (req, res) => {
+  const list = req.files || [];
+  const name = oneLine(req.body?.name ?? '', 30);
+  if (list.length !== 1 || !name) { drop(list); return res.status(400).json({ error: list.length === 1 ? 'font_name' : 'font' }); }
+  if (q.fontCount.get(req.user.id).n >= 15) { drop(list); return res.status(400).json({ error: 'font_full' }); }
+  let file;
+  try { [file] = keep(list, FONT); } catch (e) { return res.status(400).json({ error: 'font' }); }
+  const id = q.fontAdd.run(req.user.id, name, file, now()).lastInsertRowid;
+  changed();
+  res.json({ ok: true, id: Number(id) });
+});
+app.post('/api/fonts/:id/delete', requireUser, (req, res) => {
+  const f = q.fontGet.get(toId(req.params.id));
+  if (!f) return res.status(404).json({ error: 'not_found' });
+  if (f.user_id !== req.user.id) return res.status(403).json({ error: 'forbidden' });
+  q.fontDel.run(f.id);
+  if (FILE_RE.test(f.file)) fs.rmSync(path.join(UP, f.file), { force: true });
   changed();
   res.json({ ok: true });
 });
