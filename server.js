@@ -112,6 +112,9 @@ const q = {
   events: db.prepare('SELECT id, user_id AS uid, title, date, time, place, note FROM events WHERE date >= ? ORDER BY date, time'),
   going: db.prepare('SELECT event_id, user_id FROM going'),
   eventExists: db.prepare('SELECT 1 FROM events WHERE id = ?'),
+  eventGet: db.prepare('SELECT id, user_id, title FROM events WHERE id = ?'),
+  updEvent: db.prepare('UPDATE events SET title = ?, date = ?, time = ?, place = ?, note = ? WHERE id = ?'),
+  delEvent: db.prepare('DELETE FROM events WHERE id = ?'),
   addEvent: db.prepare('INSERT INTO events (user_id, title, date, time, place, note, ts) VALUES (?, ?, ?, ?, ?, ?, ?)'),
   addGoing: db.prepare('INSERT OR IGNORE INTO going (event_id, user_id) VALUES (?, ?)'),
   delGoing: db.prepare('DELETE FROM going WHERE event_id = ? AND user_id = ?'),
@@ -818,17 +821,47 @@ app.post('/api/notifs/seen', requireUser, (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/events', requireUser, (req, res) => {
-  const b = req.body || {};
+// the fields of an event, checked; null if something is wrong
+function eventFields(b) {
+  b = b || {};
   const title = oneLine(b.title, 80, 1);
   const place = oneLine(b.place ?? '', 80);
   const note = clean(b.note ?? '', 1000);
   const date = typeof b.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(b.date) && !isNaN(Date.parse(b.date)) ? b.date : null;
   const time = typeof b.time === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(b.time) ? b.time : '';
-  if (!title || !date || place === null || note === null) return res.status(400).json({ error: 'bad_request' });
-  const id = Number(q.addEvent.run(req.user.id, title, date, time, place, note, now()).lastInsertRowid);
+  return !title || !date || place === null || note === null ? null : { title, date, time, place, note };
+}
+app.post('/api/events', requireUser, (req, res) => {
+  const e = eventFields(req.body);
+  if (!e) return res.status(400).json({ error: 'bad_request' });
+  const id = Number(q.addEvent.run(req.user.id, e.title, e.date, e.time, e.place, e.note, now()).lastInsertRowid);
   q.addGoing.run(id, req.user.id);
-  sys(`${req.user.name} creó un evento: ${title}`);
+  sys(`${req.user.name} creó un evento: ${e.title}`);
+  changed();
+  res.json({ ok: true });
+});
+// Only the person who created an event can change it or cancel it.
+const ownEvent = (req, res) => {
+  const ev = q.eventGet.get(toId(req.params.id));
+  if (!ev) { res.status(404).json({ error: 'event_gone' }); return null; }
+  if (ev.user_id !== req.user.id) { res.status(403).json({ error: 'forbidden' }); return null; }
+  return ev;
+};
+app.post('/api/events/:id/edit', requireUser, (req, res) => {
+  const ev = ownEvent(req, res);
+  if (!ev) return;
+  const e = eventFields(req.body);
+  if (!e) return res.status(400).json({ error: 'bad_request' });
+  q.updEvent.run(e.title, e.date, e.time, e.place, e.note, ev.id);
+  sys(`${req.user.name} cambió el evento: ${e.title}`);
+  changed();
+  res.json({ ok: true });
+});
+app.post('/api/events/:id/delete', requireUser, (req, res) => {
+  const ev = ownEvent(req, res);
+  if (!ev) return;
+  q.delEvent.run(ev.id);
+  sys(`${req.user.name} canceló el evento: ${ev.title}`);
   changed();
   res.json({ ok: true });
 });

@@ -56,6 +56,7 @@
   }
   const ERR = {
     rate: 'Vas muy rápido. Esperá unos segundos.',
+    event_gone: 'Ese evento ya no existe.',
     font: 'Ese archivo no parece una letra. Tiene que ser TTF, OTF, WOFF o WOFF2 y pesar hasta 3 MB.',
     font_name: 'Ponele un nombre de 1 a 30 caracteres.',
     font_full: 'Ya subiste 15 letras. Borrá alguna para subir otra.',
@@ -742,6 +743,7 @@
         h('div', { class: 'yeah-avs' }, p.yeahs.map(id => h('span', { class: 'go', title: userOf(id).name, onclick: () => openProfile(id) }, avatar(id, 36))))) : null);
   }
 
+  // one form for both: a new event, or changing one of yours (R.eventForm.edit fills it in)
   function eventControls() {
     const title = h('input', { class: 'input', maxLength: 80, placeholder: 'Noche de juegos de mesa', required: true });
     const date = h('input', { class: 'input', type: 'date', min: todayAR(), required: true });
@@ -749,23 +751,53 @@
     const place = h('input', { class: 'input', maxLength: 80, placeholder: 'Casa de Leo' });
     const note = h('textarea', { class: 'input', maxLength: 1000, placeholder: 'Traigan algo para picar, la bebida la vemos.' });
     const toggleBtn = h('button', { class: 'btn', type: 'button' }, '+ Nuevo evento');
+    const heading = h('b', { class: 'small' });
+    const save = h('button', { class: 'btn', type: 'submit' }, 'Crear evento');
+    let editing = null; // id of the event being changed
+    const show = ev => {
+      editing = ev ? ev.id : null;
+      form.reset();
+      if (ev) { title.value = ev.title; date.value = ev.date; time.value = ev.time || ''; place.value = ev.place || ''; note.value = ev.note || ''; }
+      heading.textContent = ev ? `Cambiando «${ev.title}»` : '';
+      save.textContent = ev ? 'Guardar cambios' : 'Crear evento';
+      form.classList.remove('hidden');
+      toggleBtn.textContent = 'x Cancelar';
+    };
+    const hide = () => { editing = null; form.reset(); form.classList.add('hidden'); toggleBtn.textContent = '+ Nuevo evento'; };
     const form = h('form', {
       class: 'compose hidden',
       onsubmit: async e => {
         e.preventDefault();
+        save.disabled = true;
         try {
-          await api('/api/events', { title: title.value, date: date.value, time: time.value, place: place.value, note: note.value });
-          form.reset(); form.classList.add('hidden'); toggleBtn.textContent = '+ Nuevo evento';
+          await api(editing ? `/api/events/${editing}/edit` : '/api/events', { title: title.value, date: date.value, time: time.value, place: place.value, note: note.value });
+          hide();
         } catch (x) { toast(errMsg(x)); }
+        save.disabled = false;
       }
-    }, field('¿Qué pasa?', title), h('div', { class: 'grid3fields' }, field('Fecha:', date), field('Hora:', time), field('Dónde:', place)), field('Detalles:', note),
-    h('div', { class: 'end' }, h('button', { class: 'btn', type: 'submit' }, 'Crear evento')));
+    }, heading, field('¿Qué pasa?', title), h('div', { class: 'grid3fields' }, field('Fecha:', date), field('Hora:', time), field('Dónde:', place)), field('Detalles:', note),
+    h('div', { class: 'end' }, save));
     toggleBtn.addEventListener('click', () => {
-      const hidden = form.classList.toggle('hidden');
-      toggleBtn.textContent = hidden ? '+ Nuevo evento' : 'x Cancelar';
-      if (!hidden) title.focus();
+      if (form.classList.contains('hidden')) { show(null); title.focus(); } else hide();
     });
+    R.eventForm = {
+      edit(ev) { show(ev); form.scrollIntoView({ block: 'center', behavior: 'smooth' }); title.focus({ preventScroll: true }); },
+      gone(id) { if (editing === id) hide(); }
+    };
     return [h('div', { class: 'end' }, toggleBtn), form];
+  }
+  // "change" and "cancel" for the events you created
+  function eventOwnerBtns(ev, cls) {
+    if (ev.uid !== S.me.id) return [];
+    return [
+      h('button', { class: cls, type: 'button', onclick: () => R.eventForm && R.eventForm.edit(ev) }, cls === 'btn' ? '✎ Editar' : 'editar'),
+      h('button', {
+        class: cls, type: 'button',
+        onclick: async () => {
+          if (!confirm(`¿Cancelar el evento «${ev.title}»? Se borra para todos.`)) return;
+          try { await api(`/api/events/${ev.id}/delete`, {}); if (R.eventForm) R.eventForm.gone(ev.id); } catch (x) { toast(errMsg(x)); }
+        }
+      }, cls === 'btn' ? 'Cancelar evento' : 'cancelar')];
   }
   function eventsList() {
     const list = upcoming();
@@ -782,14 +814,18 @@
         nx.note ? h('div', { class: 'post-text' }, nx.note) : null,
         h('div', { class: 'inline-form' },
           h('button', { class: 'btn', type: 'button', onclick: () => api(`/api/events/${nx.id}/going`, {}).catch(x => toast(errMsg(x))) }, nx.isGoing ? '✔ Voy' : '+ Me sumo'),
-          h('span', { class: 'small muted' }, nx.goingNames))))];
+          h('span', { class: 'small muted' }, nx.goingNames),
+          h('span', { class: 'spacer' }),
+          eventOwnerBtns(nx, 'btn'),
+          h('span', { class: 'small muted' }, 'Lo armó ' + userOf(nx.uid).name))))];
     if (list.length > 1) {
       out.push(h('table', { class: 'tbl' },
         h('thead', null, h('tr', null, h('th', null, 'Después'), h('th', null, 'Fecha'), h('th', null, 'Hora'), h('th', null, 'Van'))),
         h('tbody', null, list.slice(1).map(ev => {
           const f = fmt(ev);
           return h('tr', null, h('td', null, h('b', null, f.title)), h('td', null, f.dateText), h('td', null, f.timeText),
-            h('td', null, h('button', { class: 'linkbtn', type: 'button', onclick: () => api(`/api/events/${f.id}/going`, {}).catch(x => toast(errMsg(x))) }, `${f.goingText} · ${f.isGoing ? 'no voy' : 'me sumo'}`)));
+            h('td', null, h('button', { class: 'linkbtn', type: 'button', onclick: () => api(`/api/events/${f.id}/going`, {}).catch(x => toast(errMsg(x))) }, `${f.goingText} · ${f.isGoing ? 'no voy' : 'me sumo'}`),
+              eventOwnerBtns(f, 'linkbtn').flatMap(b => [' · ', b])));
         }))));
     }
     return out;
